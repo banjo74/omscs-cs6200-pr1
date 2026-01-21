@@ -1,24 +1,28 @@
-#include <stdlib.h>
+// HEADER_START
+// HEADER_END
 #include <netinet/in.h>
-#include <unistd.h>
-#include <netdb.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+
 #include <errno.h>
 #include <getopt.h>
-#include <sys/types.h>
-#include <string.h>
-#include <sys/socket.h>
+#include <netdb.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define BUFSIZE 512
 
-#define USAGE                                                \
-    "usage:\n"                                               \
-    "  transferserver [options]\n"                           \
-    "options:\n"                                             \
-    "  -f                  Filename (Default: 6200.txt)\n"   \
-    "  -p                  Port (Default: 61321)\n"          \
-    "  -h                  Show this help message\n"         \
+#define USAGE                                              \
+    "usage:\n"                                             \
+    "  transferserver [options]\n"                         \
+    "options:\n"                                           \
+    "  -f                  Filename (Default: 6200.txt)\n" \
+    "  -p                  Port (Default: 61321)\n"        \
+    "  -h                  Show this help message\n"
 
+#ifndef TEST_MODE
 /* OPTIONS DESCRIPTOR ====================================================== */
 static struct option gLongOptions[] = {
     {"port", required_argument, NULL, 'p'},
@@ -26,11 +30,10 @@ static struct option gLongOptions[] = {
     {"help", no_argument, NULL, 'h'},
     {NULL, 0, NULL, 0}};
 
-int main(int argc, char **argv)
-{
-    int option_char;
-    int portno = 61321;             /* port to listen on */
-    char *filename = "6200.txt"; /* file to transfer */
+int main(int argc, char** argv) {
+    int   option_char;
+    int   portno   = 61321;      /* port to listen on */
+    char* filename = "6200.txt"; /* file to transfer */
 
     setbuf(stdout, NULL); // disable buffering
 
@@ -58,12 +61,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s @ %d: invalid port number (%d)\n", __FILE__, __LINE__, portno);
         exit(1);
     }
-    
+
     if (NULL == filename) {
         fprintf(stderr, "%s @ %d: invalid filename\n", __FILE__, __LINE__);
         exit(1);
     }
 
     /* Socket Code Here */
-
 }
+#endif

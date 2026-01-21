@@ -1,0 +1,124 @@
+# -*- yaml -*-
+
+---
+
+BasedOnStyle: Google
+
+#------------------------------------------------------------------#
+# "C++ Standard Override" in http://sbtools/help/sbindent_standard #
+#------------------------------------------------------------------#
+Standard: c++20
+
+# "ColumnLimit: 0" means mostly respect existing line breaks. Setting to 100 can hurt readability
+# when indenting existing code. Directories that what 100 columns, can set "ColumnLimit: 100" in
+# their _clang-format.
+ColumnLimit: 0
+IndentWidth: 4
+AccessModifierOffset: -2
+IndentCaseLabels: false
+
+MaxEmptyLinesToKeep: 2
+KeepEmptyLines:
+  AtStartOfBlock: true
+SeparateDefinitionBlocks: Always
+
+AllowShortFunctionsOnASingleLine: Empty
+
+# relevant for c++20
+IndentRequiresClause: false
+# RequiresClausePosition: OwnLineWithBrace
+
+# Google defalut pointer alignment is Left, use it always
+DerivePointerAlignment: false
+
+SortIncludes: true
+IncludeCategories:
+  # See: https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+  # Note that the order here matters and the first regular expression to
+  # match a header assigns the corresponding priority.
+  #
+  # the main header has priority 0
+  #
+  # if a header doesn't match any regex, assign INT_MAX (I think that's
+  # impossible with these Regex's, at least for well-formed directives).
+  #
+  # The groups are:
+  #
+  # Main Header:            0
+  # Local:                 10
+  # External:              20
+  # 3p:                    30
+  # System:                40
+  #
+  # system, uses <> but does not contain /
+  - Regex:           '^<[^/>]+>$'
+    Priority:        40
+  # 3p, uses <> but contains /
+  - Regex:           '^<[^>]+>$'
+    Priority:        30
+  # Local headers, don't contain / or begin with .
+  - Regex:           '^"[^/"]+"$'
+    Priority:        10
+  - Regex:           '^"\.[^"]+"$'
+    Priority:        10
+  # Any other is general
+  - Regex:           '^"[^"]+"$'
+    Priority:        20
+
+BinPackParameters: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+BreakConstructorInitializers: BeforeComma
+PackConstructorInitializers: Never
+
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+StatementMacros:
+  - NB_UNUSED
+
+CompactNamespaces: true
+
+JavaScriptWrapImports: false
+
+InsertBraces: true
+
+AlignArrayOfStructures: None
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveBitFields: AcrossEmptyLinesAndComments
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveMacros: Consecutive
+BinPackArguments: false
+
+SpacesBeforeTrailingComments: 1
+
+LineEnding: LF
+InsertNewlineAtEOF: true
+
+QualifierAlignment: Right
+
+##################
+# Language: JSON #
+##################
+---
+Language: Json
+
+# "AlignArrayOfStructures: Right" causes indent problems for JSON
+AlignArrayOfStructures: None
+
+
+########################
+# Language: JavaScript #
+########################
+---
+Language: JavaScript
+
+# "AlignArrayOfStructures: Right" causes problems for structs initialized using JSON syntax.
+AlignArrayOfStructures: None
+
+
+...
+
+# LocalWords:  yaml llvm ASingle CDeclaration Pragmas IWYU KJ LF CBin CBlock CBreak CSpace pb CStyle
+# LocalWords:  STRINGIZE reflowed sbtoptesters Bvariant aaaa ccc sbindent Noexcept Parens mw Dont
+# LocalWords:  absl nonnull nullable nullability func

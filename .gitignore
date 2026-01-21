@@ -3,11 +3,20 @@
 .bonnie
 
 echo/student.zip
+echo/echoclient
+echo/echoserver
+
 gflib/student.zip
 mtgf/student.zip
 
 echo/*-result-*.json
 gflib/*-result-*.json
 mtgf/*-result-*.json
+
+bin
+derived
+ts
+obj
+
 
 *.log
