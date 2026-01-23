@@ -22,6 +22,7 @@ TESTBINDIR  := $(DERIVEDDIR)
 TESTTSDIR   := $(DERIVEDDIR)/ts
 OBJDIR      := $(DERIVEDDIR)/obj
 GENHDRDIR   := $(DERIVEDDIR)/include
+BINDIR      := $(THISDIR)/bin/$(ARCHDIR)/$(MODNAME)
 
 ALLFILESWITHEXTENSION = $(sort $(patsubst ./%,%,$(shell find . -name '*.$(1)')))
 ALLCFILES   := $(call ALLFILESWITHEXTENSION,c)
@@ -35,12 +36,23 @@ SRCCPPFILES  := $(filter-out $(TESTCPPFILES),$(ALLCPPFILES))
 
 TESTEXE      := $(TESTBINDIR)/test
 
-TESTTS       := $(TESTTSDIR)/$(MODNAME).ts
+TESTTS       := $(TESTTSDIR)/$(MODNAME).unit.ts
+SYSTEMTESTTS := $(TESTTSDIR)/$(MODNAME).system.ts
 
 SRCCOBJS     := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCCFILES))
 SRCCPPOBJS   := $(patsubst %.cpp,$(OBJDIR)/%.o,$(SRCCPPFILES))
 TESTCOBJS    := $(patsubst %.c,$(OBJDIR)/%.o,$(TESTCFILES))
 TESTCPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%.o,$(TESTCPPFILES))
+
+MAINC        := $(if $(SRCCFILES),$(shell grep -l TEST_MODE $(SRCCFILES)))
+MAINCPP      := $(if $(SRCCPPFILES),$(shell grep -l TEST_MODE $(SRCCPPFILES)))
+
+MAINCOBJS    := $(patsubst %.c,$(OBJDIR)/%_main.o,$(MAINC))
+MAINCPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%_main.o,$(MAINCPP))
+
+MAINOBJS     := $(sort $(MAINCOBJS) $(MAINCPPOBJS))
+EXE          := $(patsubst $(OBJDIR)/%_main.o,$(BINDIR)/%,$(MAINOBJS))
+$(info $(EXE))
 
 GENHDRFROM   := $(shell grep -l HEADER_START $(SRCCFILES))
 GENHDR       := $(patsubst %.c,$(GENHDRDIR)/%.h,$(GENHDRFROM))
@@ -66,10 +78,12 @@ OBJS         := $(sort $(SRCCOBJS) $(SRCCPPOBJS)) $(sort $(TESTCOBJS) $(TESTCPPO
 
 DEPFILE       = $(patsubst %.o,%.d,$(1))
 
-CFLAGS = -c $< -o $@ -O2 -g -Wpedantic -Wall -Werror -DTEST_MODE=1 -MMD -MF $(call DEPFILE,$@) -MP
+CFLAGS = -c $< -o $@ -O2 -g -Wpedantic -Wall -Werror -MMD -MF $(call DEPFILE,$@) -MP
 
-$(SRCCOBJS) $(TESTCOBJS)     : CFLAGS+=-std=c99
-$(SRCCPPOBJS) $(TESTCPPOBJS) : CFLAGS+=-std=c++20
+$(SRCCOBJS) $(TESTCOBJS) $(MAINCOBJ) : CFLAGS+=-std=c99 
+$(SRCCPPOBJS) $(TESTCPPOBJS) $(MAINCPPOBJ) : CFLAGS+=-std=c++20 
+
+$(SRCCOBJS) $(SRCCPPOBJS) : CFLAGS+=-DTEST_MODE=1
 
 $(TESTCOBJS) $(TESTCPPOBJS) : CFLAGS+=-I$(GOOGLETEST_ROOT)/googletest/include -I$(GOOGLETEST_ROOT)/googlemock/include -I$(BOOST_ROOT) -I$(GENHDRDIR)
 $(TESTCOBJS) $(TESTCPPOBJS) : | $(GENHDR)
@@ -80,15 +94,36 @@ $(SRCCOBJS) $(TESTCOBJS) : $(OBJDIR)/%.o : %.c
 $(SRCCPPOBJS) $(TESTCPPOBJS) : $(OBJDIR)/%.o : %.cpp
 	g++ $(CFLAGS)
 
+$(MAINCOBJS) : $(OBJDIR)/%_main.o : %.c 
+	gcc $(CFLAGS)
+
+$(MAINCPPOBJS) : $(OBJDIR)/%_main.o : %.cpp
+	g++ $(CFLAGS)
+
 $(TESTEXE) : $(OBJS) $(MAKEFILE_LIST) | $(TESTBINDIR)
 	g++ -o $@ $(OBJS) $(GOOGLETEST_ROOT)/build/lib/libgmock.a $(GOOGLETEST_ROOT)/build/lib/libgtest.a
+
+EXESRCOBJ := $(sort \
+  $(filter-out $(patsubst %.c,%.o,$(MAINC)),$(SRCCOBJ)) \
+  $(filter-out $(patsubst %.cpp,%.o,$(MAINCPP)),$(SRCCPPOBJ)))
+
+$(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJ) | $(BINDIR)
+	g++ -o $@ $< $(EXESRCOBJS)
 
 $(TESTTS) : $(TESTEXE) | $(TESTTSDIR)
 	$(RM) $@
 	$(TESTEXE)
 	touch $@
 
-build : $(OBJS) $(TESTEXE) $(TESTTS)
+SYSTEMTEST   := $(wildcard test/*_system.pl)
+SYSTEMTESTTS := $(patsubst test/%_system.pl,$(TESTTSDIR)/%_system.ts,$(SYSTEMTEST))
+$(SYSTEMTESTTS) : $(TESTTSDIR)/%_system.ts : test/%_system.pl $(TESTTS) $(EXE) | $(TESTTSDIR)
+	$(RM) $@
+	perl $< $(BINDIR)
+	touch $@
+
+
+build : $(OBJS) $(TESTEXE) $(TESTTS) $(EXE) $(SYSTEMTESTTS)
 
 .PHONY : clean
 clean : 
@@ -97,7 +132,7 @@ clean :
 ALLOBJDIRS := $(sort $(patsubst %/,%,$(dir $(OBJS))))
 $(OBJS) : $(MAKEFILE_LIST) | $(ALLOBJDIRS)
 
-$(ALLOBJDIRS) $(TESTBINDIR) $(TESTTSDIR) $(GENHDRDIR) :
+$(ALLOBJDIRS) $(TESTBINDIR) $(TESTTSDIR) $(GENHDRDIR) $(BINDIR) :
 	mkdir -p $@
 
 -include $(call DEPFILE,$(OBJS))
