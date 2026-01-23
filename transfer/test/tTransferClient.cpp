@@ -1,5 +1,5 @@
 
-#include "ByteReceiveClient.hpp"
+#include "ByteSink.hpp"
 #include "ClientPtr.hpp"
 #include "random_seed.hpp"
 #include "transferclient.h"
@@ -58,7 +58,7 @@ std::thread launch_mock_server(boost::asio::io_context& ioContext,
 #if 0
 TransferClientStatus expect_no_call(TransferClient*   ec,
                                     char const* const message) {
-    ByteReceiveClient client;
+    ByteSink client;
     auto              status = tc_receive(ec, client.client());
     EXPECT_THAT(client.data(), testing::IsEmpty());
     return status;
@@ -74,15 +74,15 @@ TEST(TransferClient, SendAndReceive) {
     std::vector<Bytes> const bytess{
         Bytes{},
         Bytes(10, std::byte{0}),
-        random_bytes(gen, 32),
+        random_bytes(gen, 1024 * 1024),
     };
 
-    for (size_t i = 0; i < 1; ++i) {
+    for (size_t i = 0; i < 1024; ++i) {
         for (auto const& bytes : bytess) {
-            auto t = launch_mock_server(ioContext, default_port, bytes);
-            ByteReceiveClient rc;
-            EXPECT_EQ(tc_receive(ec.get(), rc.client()), TransferClientSuccess);
-            EXPECT_EQ(rc.data(), bytes);
+            auto     t = launch_mock_server(ioContext, default_port, bytes);
+            ByteSink sink;
+            EXPECT_EQ(tc_receive(ec.get(), sink.base()), TransferClientSuccess);
+            EXPECT_EQ(sink.data(), bytes);
             t.join();
         }
     }

@@ -6,7 +6,7 @@
 
 typedef struct TransferClientTag TransferClient;
 
-typedef struct ReceiveClientTag ReceiveClient;
+typedef struct TransferSinkTag TransferSink;
 
 typedef enum {
     TransferClientSuccess,
@@ -27,54 +27,54 @@ TransferClient* tc_create(TransferClientStatus* status,
 // connect to the host provied to tc_create and retrieve the data it provides.
 // retrieved ata is sent to receiveFcn.
 // userData is the first function
-TransferClientStatus tc_receive(TransferClient*, ReceiveClient* receiveClient);
+TransferClientStatus tc_receive(TransferClient*, TransferSink* receiveClient);
 
 // destroy the provided client
 void tc_destroy(TransferClient*);
 
-typedef void* (*ReceiveClientStartFcn)(void* clientData);
+typedef void* (*TransferSinkStartFcn)(void* clientData);
 
-typedef ssize_t (*ReceiveClientSendFcn)(void*       clientData,
-                                        void*       sessionData,
-                                        void const* buffer,
-                                        size_t      n);
+typedef ssize_t (*TransferSinkSendFcn)(void*       clientData,
+                                       void*       sessionData,
+                                       void const* buffer,
+                                       size_t      n);
 
-typedef void (*ReceiveClientCancelFcn)(void* clientData, void* sessionData);
+typedef void (*TransferSinkCancelFcn)(void* clientData, void* sessionData);
 
-typedef int (*ReceiveClientFinishFcn)(void* clientData, void* sessionData);
+typedef int (*TransferSinkFinishFcn)(void* clientData, void* sessionData);
 
 /*!
  */
-struct ReceiveClientTag {
-    ReceiveClientStartFcn  startFcn;
-    ReceiveClientSendFcn   sendFcn;
-    ReceiveClientCancelFcn cancelFcn;
-    ReceiveClientFinishFcn finishFcn;
-    void*                  clientData;
+struct TransferSinkTag {
+    TransferSinkStartFcn  startFcn;
+    TransferSinkSendFcn   sendFcn;
+    TransferSinkCancelFcn cancelFcn;
+    TransferSinkFinishFcn finishFcn;
+    void*                 clientData;
 };
 
-void rc_initialize(ReceiveClient* emptyClient,
-                   ReceiveClientStartFcn,
-                   ReceiveClientSendFcn,
-                   ReceiveClientCancelFcn,
-                   ReceiveClientFinishFcn,
-                   void* clientData);
+void sink_initialize(TransferSink* emptyClient,
+                     TransferSinkStartFcn,
+                     TransferSinkSendFcn,
+                     TransferSinkCancelFcn,
+                     TransferSinkFinishFcn,
+                     void* clientData);
 
-void* rc_start(ReceiveClient* client);
+void* sink_start(TransferSink* client);
 
-ssize_t rc_send(ReceiveClient* client, void*, void const*, size_t);
+ssize_t sink_send(TransferSink* client, void*, void const*, size_t);
 
-void rc_cancel(ReceiveClient* client, void*);
+void sink_cancel(TransferSink* client, void*);
 
-int rc_finish(ReceiveClient* client, void*);
+int sink_finish(TransferSink* client, void*);
 
-typedef struct FileReceiveClientTag FileReceiveClient;
+typedef struct FileTransferSinkTag FileTransferSink;
 
-FileReceiveClient* frc_create(char const*);
+FileTransferSink* fsink_create(char const*);
 
-ReceiveClient* frc_client(FileReceiveClient*);
+TransferSink* fsink_client(FileTransferSink*);
 
-void frc_destroy(FileReceiveClient*);
+void fsink_destroy(FileTransferSink*);
 
 // HEADER_END
 
@@ -112,12 +112,12 @@ static struct option gLongOptions[] = {{"server", required_argument, NULL, 's'},
 
 /* Main ========================================================= */
 int main(int argc, char** argv) {
-    int                option_char = 0;
-    char*              hostname    = "localhost";
-    unsigned short     portno      = 61321;
-    char*              filename    = "cs6200.txt";
-    FileReceiveClient* frc         = NULL;
-    TransferClient*    tc          = NULL;
+    int               option_char = 0;
+    char*             hostname    = "localhost";
+    unsigned short    portno      = 61321;
+    char*             filename    = "cs6200.txt";
+    FileTransferSink* fsink       = NULL;
+    TransferClient*   tc          = NULL;
 
     setbuf(stdout, NULL);
 
@@ -169,16 +169,17 @@ int main(int argc, char** argv) {
         goto EXIT_POINT;
     }
 
-    frc = frc_create(filename);
-    if ((status = tc_receive(tc, frc_client(frc))) != TransferClientSuccess) {
+    fsink = fsink_create(filename);
+    if ((status = tc_receive(tc, fsink_client(fsink))) !=
+        TransferClientSuccess) {
         goto EXIT_POINT;
     }
 EXIT_POINT:
     if (tc) {
         tc_destroy(tc);
     }
-    if (frc) {
-        frc_destroy(frc);
+    if (fsink) {
+        fsink_destroy(fsink);
     }
     return status != TransferClientSuccess;
 }
@@ -245,26 +246,25 @@ static int create_and_connect_to_socket_(TransferClient* const tc) {
     return -1;
 }
 
-static TransferClientStatus receive_and_redirect_(
-    TransferClient* const tc,
-    int const             socketId,
-    ReceiveClient*        receiveClient) {
+static TransferClientStatus receive_and_redirect_(TransferClient* const tc,
+                                                  int const     socketId,
+                                                  TransferSink* receiveClient) {
     char  buffer[1024];
     int   rc          = -1;
-    void* receiveData = rc_start(receiveClient);
+    void* receiveData = sink_start(receiveClient);
     while ((rc = recv(socketId, buffer, sizeof(buffer), 0)) > 0) {
-        rc_send(receiveClient, receiveData, buffer, (size_t)rc);
+        sink_send(receiveClient, receiveData, buffer, (size_t)rc);
     }
     if (rc < 0) {
-        rc_cancel(receiveClient, receiveData);
+        sink_cancel(receiveClient, receiveData);
         return TransferClientFailedToReceive;
     }
-    rc_finish(receiveClient, receiveData);
+    sink_finish(receiveClient, receiveData);
     return TransferClientSuccess;
 }
 
 TransferClientStatus tc_receive(TransferClient* const tc,
-                                ReceiveClient*        receiveClient) {
+                                TransferSink*         receiveClient) {
     int const socket = create_and_connect_to_socket_(tc);
     if (socket == -1) {
         return TransferClientFailedToConnect;
@@ -280,47 +280,47 @@ void tc_destroy(TransferClient* tc) {
     free(tc);
 }
 
-void rc_initialize(ReceiveClient*         rc,
-                   ReceiveClientStartFcn  startFcn,
-                   ReceiveClientSendFcn   sendFcn,
-                   ReceiveClientCancelFcn cancelFcn,
-                   ReceiveClientFinishFcn finishFcn,
-                   void*                  clientData) {
-    memset(rc, 0, sizeof(ReceiveClient));
-    rc->startFcn   = startFcn;
-    rc->sendFcn    = sendFcn;
-    rc->cancelFcn  = cancelFcn;
-    rc->finishFcn  = finishFcn;
-    rc->clientData = clientData;
+void sink_initialize(TransferSink*         sink,
+                     TransferSinkStartFcn  startFcn,
+                     TransferSinkSendFcn   sendFcn,
+                     TransferSinkCancelFcn cancelFcn,
+                     TransferSinkFinishFcn finishFcn,
+                     void*                 clientData) {
+    memset(sink, 0, sizeof(TransferSink));
+    sink->startFcn   = startFcn;
+    sink->sendFcn    = sendFcn;
+    sink->cancelFcn  = cancelFcn;
+    sink->finishFcn  = finishFcn;
+    sink->clientData = clientData;
 }
 
-void* rc_start(ReceiveClient* rc) {
-    return rc->startFcn(rc->clientData);
+void* sink_start(TransferSink* sink) {
+    return sink->startFcn(sink->clientData);
 }
 
-ssize_t rc_send(ReceiveClient* const rc,
-                void* const          session,
-                void const* const    buffer,
-                size_t const         n) {
-    return rc->sendFcn(rc->clientData, session, buffer, n);
+ssize_t sink_send(TransferSink* const sink,
+                  void* const         session,
+                  void const* const   buffer,
+                  size_t const        n) {
+    return sink->sendFcn(sink->clientData, session, buffer, n);
 }
 
-void rc_cancel(ReceiveClient* rc, void* session) {
-    rc->cancelFcn(rc->clientData, session);
+void sink_cancel(TransferSink* sink, void* session) {
+    sink->cancelFcn(sink->clientData, session);
 }
 
-int rc_finish(ReceiveClient* rc, void* session) {
-    return rc->finishFcn(rc->clientData, session);
+int sink_finish(TransferSink* sink, void* session) {
+    return sink->finishFcn(sink->clientData, session);
 }
 
-struct FileReceiveClientTag {
-    ReceiveClient base;
-    char*         fileName;
+struct FileTransferSinkTag {
+    TransferSink base;
+    char*        fileName;
 };
 
 static void* file_receive_start_(void* const clientData) {
-    FileReceiveClient* const frc = (FileReceiveClient*)clientData;
-    return fopen(frc->fileName, "w");
+    FileTransferSink* const fsink = (FileTransferSink*)clientData;
+    return fopen(fsink->fileName, "w");
 }
 
 static ssize_t file_receive_send_(void* const       clientData,
@@ -334,10 +334,10 @@ static ssize_t file_receive_send_(void* const       clientData,
 
 static void file_receive_cancel_(void* const clientData,
                                  void* const sessionData) {
-    FileReceiveClient* const frc = (FileReceiveClient*)clientData;
-    FILE* const              fh  = (FILE*)sessionData;
+    FileTransferSink* const fsink = (FileTransferSink*)clientData;
+    FILE* const             fh    = (FILE*)sessionData;
     fclose(fh);
-    remove(frc->fileName);
+    remove(fsink->fileName);
 }
 
 static int file_receive_finish_(void* const clientData,
@@ -348,23 +348,23 @@ static int file_receive_finish_(void* const clientData,
     return 1;
 }
 
-FileReceiveClient* frc_create(char const* fileName) {
-    FileReceiveClient* out =
-        (FileReceiveClient*)calloc(1, sizeof(FileReceiveClient));
-    rc_initialize(&out->base,
-                  file_receive_start_,
-                  file_receive_send_,
-                  file_receive_cancel_,
-                  file_receive_finish_,
-                  out);
+FileTransferSink* fsink_create(char const* fileName) {
+    FileTransferSink* out =
+        (FileTransferSink*)calloc(1, sizeof(FileTransferSink));
+    sink_initialize(&out->base,
+                    file_receive_start_,
+                    file_receive_send_,
+                    file_receive_cancel_,
+                    file_receive_finish_,
+                    out);
     return out;
 }
 
-ReceiveClient* frc_client(FileReceiveClient* frc) {
-    return &frc->base;
+TransferSink* fsink_client(FileTransferSink* fsink) {
+    return &fsink->base;
 }
 
-void frc_destroy(FileReceiveClient* frc) {
-    free(frc->fileName);
-    free(frc);
+void fsink_destroy(FileTransferSink* fsink) {
+    free(fsink->fileName);
+    free(fsink);
 }
