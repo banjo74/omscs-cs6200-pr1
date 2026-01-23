@@ -1,6 +1,7 @@
 #ifndef transfer_test_ByteSink_hpp
 #define transfer_test_ByteSink_hpp
 
+#include "Bytes.hpp"
 #include "transferclient.h"
 
 #include <cstddef>
@@ -9,9 +10,7 @@
 namespace transfer::test {
 class ByteSink {
   public:
-    using Data = std::vector<std::byte>;
-
-    ByteSink(Data s = {});
+    ByteSink(Bytes s = {});
 
     ByteSink(ByteSink const& o)
         : ByteSink{o.data_} {}
@@ -23,15 +22,15 @@ class ByteSink {
         return &base_;
     }
 
-    Data data() const {
+    Bytes data() const {
         return data_;
     }
 
-    void data(Data);
+    void data(Bytes);
 
   private:
     TransferSink base_;
-    Data         data_;
+    Bytes        data_;
 };
 } // namespace transfer::test
 

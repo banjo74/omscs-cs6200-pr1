@@ -1,5 +1,6 @@
 
 #include "ByteSink.hpp"
+#include "Bytes.hpp"
 #include "ClientPtr.hpp"
 #include "random_seed.hpp"
 #include "transferclient.h"
@@ -18,7 +19,6 @@ using boost::asio::ip::tcp;
 using namespace transfer::test;
 
 namespace {
-using Bytes                       = std::vector<std::byte>;
 unsigned short const default_port = 14757;
 
 template <typename Rng>
@@ -66,7 +66,7 @@ TransferClientStatus expect_no_call(TransferClient*   ec,
 #endif
 } // namespace
 
-TEST(TransferClient, SendAndReceive) {
+TEST(TransferClient, Receive) {
     auto [ec, statusIgnored] = create_client("localhost", default_port);
     boost::asio::io_context ioContext{1};
 
