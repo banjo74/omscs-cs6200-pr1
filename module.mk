@@ -2,8 +2,26 @@
 .PHONY : buld
 build:
 
+MACHINE     := $(shell uname -m)
+NATIVE_OS   := $(shell uname -o)
+ifeq ($(NATIVE_OS),GNU/Linux)
+  OS := linux
+else ifeq ($(NATIVE_OS),Darwin)
+  OS := macos
+else
+  $(error Unknown OS $(NATIVE_OS))
+endif
+
+ARCHDIR     := $(OS)/$(MACHINE)
+
 THISDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 MODNAME     := $(notdir $(realpath .))
+
+DERIVEDDIR  := $(THISDIR)/derived/$(ARCHDIR)/$(MODNAME)
+TESTBINDIR  := $(DERIVEDDIR)
+TESTTSDIR   := $(DERIVEDDIR)/ts
+OBJDIR      := $(DERIVEDDIR)/obj
+GENHDRDIR   := $(DERIVEDDIR)/include
 
 ALLFILESWITHEXTENSION = $(sort $(patsubst ./%,%,$(shell find . -name '*.$(1)')))
 ALLCFILES   := $(call ALLFILESWITHEXTENSION,c)
@@ -15,13 +33,9 @@ TESTCPPFILES := $(filter test/%,$(ALLCPPFILES))
 SRCCFILES    := $(filter-out $(TESTCFILES),$(ALLCFILES))
 SRCCPPFILES  := $(filter-out $(TESTCPPFILES),$(ALLCPPFILES))
 
-TESTBINDIR   := ../bin
-TESTEXE      := $(TESTBINDIR)/$(MODNAME)
+TESTEXE      := $(TESTBINDIR)/test
 
-TESTTSDIR    := ../ts
 TESTTS       := $(TESTTSDIR)/$(MODNAME).ts
-
-OBJDIR       := ../obj/$(MODNAME)
 
 SRCCOBJS     := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCCFILES))
 SRCCPPOBJS   := $(patsubst %.cpp,$(OBJDIR)/%.o,$(SRCCPPFILES))
@@ -29,7 +43,6 @@ TESTCOBJS    := $(patsubst %.c,$(OBJDIR)/%.o,$(TESTCFILES))
 TESTCPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%.o,$(TESTCPPFILES))
 
 GENHDRFROM   := $(shell grep -l HEADER_START $(SRCCFILES))
-GENHDRDIR    := $(THISDIR)/derived/$(MODNAME)
 GENHDR       := $(patsubst %.c,$(GENHDRDIR)/%.h,$(GENHDRFROM))
 
 $(GENHDR) : $(GENHDRDIR)/%.h : %.c $(MAKEFILE_LIST) | $(GENHDRDIR)
@@ -56,7 +69,7 @@ DEPFILE       = $(patsubst %.o,%.d,$(1))
 CFLAGS = -c $< -o $@ -O2 -g -Wpedantic -Wall -Werror -DTEST_MODE=1 -MMD -MF $(call DEPFILE,$@) -MP
 
 $(SRCCOBJS) $(TESTCOBJS)     : CFLAGS+=-std=c99
-$(SRCCPPOBJS) $(TESTCPPOBJS) : CFLAGS+=-std=c++17
+$(SRCCPPOBJS) $(TESTCPPOBJS) : CFLAGS+=-std=c++20
 
 $(TESTCOBJS) $(TESTCPPOBJS) : CFLAGS+=-I$(GOOGLETEST_ROOT)/googletest/include -I$(GOOGLETEST_ROOT)/googlemock/include -I$(BOOST_ROOT) -I$(GENHDRDIR)
 $(TESTCOBJS) $(TESTCPPOBJS) : | $(GENHDR)
