@@ -12,12 +12,12 @@ Standard: c++20
 # "ColumnLimit: 0" means mostly respect existing line breaks. Setting to 100 can hurt readability
 # when indenting existing code. Directories that what 100 columns, can set "ColumnLimit: 100" in
 # their _clang-format.
-ColumnLimit: 0
+ColumnLimit: 80
 IndentWidth: 4
 AccessModifierOffset: -2
 IndentCaseLabels: false
 
-MaxEmptyLinesToKeep: 2
+MaxEmptyLinesToKeep: 1
 KeepEmptyLines:
   AtStartOfBlock: true
 SeparateDefinitionBlocks: Always
