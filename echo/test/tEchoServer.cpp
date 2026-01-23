@@ -1,32 +1,34 @@
 
 #include "ServerPtr.hpp"
 #include "echoserver.h"
+#include "max_buffer.hpp"
+#include "random_seed.hpp"
+#include "random_string.hpp"
 
 #include <boost/asio.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <limits.h>
+#include <random>
 #include <thread>
 
 using boost::asio::ip::tcp;
+using namespace echo::test;
 
 namespace {
 unsigned short const default_port = 14757;
 }
 
 TEST(EchoServer, CreateAndDestroy) {
-    auto [es, status] = echo::create_server(default_port, 5);
+    auto [es, status] = create_server(20, default_port, 5);
     EXPECT_TRUE(es);
     EXPECT_EQ(status, EchoServerSuccess);
     EXPECT_EQ(es_port(es.get()), default_port);
 }
 
 namespace {
-std::thread run_server(EchoServer* es) {
-    return std::thread{es_run, es};
-}
-
 tcp::socket connect(boost::asio::io_context& ioContext, EchoServer* es) {
     tcp::socket   socket(ioContext);
     tcp::resolver resolver(ioContext);
@@ -40,14 +42,17 @@ void send(EchoServer const* es, tcp::socket& socket, std::string msg) {
     boost::asio::write(socket, boost::asio::buffer(msg.data(), msg.size()));
 }
 
-std::string send_receive(boost::asio::io_context& ioContext, EchoServer* es, std::string const& in) {
+std::string send_receive(boost::asio::io_context& ioContext,
+                         EchoServer*              es,
+                         std::string const&       in) {
     auto socket = connect(ioContext, es);
     send(es, socket, in);
     std::vector<char>         buffer(in.size());
     boost::system::error_code error;
     size_t                    received = 0;
     try {
-        received = socket.read_some(boost::asio::buffer(buffer.data(), buffer.size()), error);
+        received = socket.read_some(
+            boost::asio::buffer(buffer.data(), buffer.size()), error);
     } catch (std::exception const& exe) {
         std::cerr << exe.what() << std::endl;
         throw;
@@ -58,98 +63,34 @@ std::string send_receive(boost::asio::io_context& ioContext, EchoServer* es, std
 
 TEST(EchoServer, StartStop) {
     boost::asio::io_context ioContext{1};
-    auto [es, statusIgnored] = echo::create_server(default_port, 5);
-    auto t                   = run_server(es.get());
-    es_stop(es.get());
-    t.join();
+    auto [es, statusIgnored] = create_server(20, default_port, 5);
+    ServerRunner runner{es};
+    EXPECT_THAT(runner.finish(), clean_server_exit());
 }
 
-TEST(EchoServer, DoIt) {
+TEST(EchoServer, BasicTest) {
     boost::asio::io_context ioContext{1};
-    auto [es, statusIgnored] = echo::create_server(default_port, 5);
-    auto t                   = run_server(es.get());
-
-    std::vector<std::string> messages{"a basic message", "", "a very very very very long message"};
-    for (auto const& m : messages) {
-        std::string str = send_receive(ioContext, es.get(), m);
-        EXPECT_EQ(str, m);
-    }
-
-    es_stop(es.get());
-    t.join();
-}
-
-#if 0
-namespace {
-enum class ShutdownWhen {
-    None,
-    AfterAccept,
-    AfterReceive
-};
-
-std::thread
-launch_mock_server(boost::asio::io_context& ioContext, unsigned short const port, ShutdownWhen const shutdown = ShutdownWhen::None) {
-    tcp::endpoint const endPoint{tcp::v4(), port};
-    auto                acceptor = std::make_shared<tcp::acceptor>(ioContext, endPoint);
-    acceptor->listen(1);
-    std::thread t{[&ioContext, acceptor = std::move(acceptor), shutdown] {
-        tcp::socket socket{ioContext};
-        acceptor->accept(socket);
-        if (shutdown == ShutdownWhen::AfterAccept) {
-            return;
+    std::mt19937            gen{random_seed()};
+    for (auto const bufferSize :
+         {size_t{16}, std::size_t{128}, std::size_t{1024}, max_buffer}) {
+        std::vector<std::string> const messages{
+            "1",
+            "a basic message",
+            "",
+            "a very very very very long message",
+            random_string(gen, bufferSize),
+            random_string(gen, bufferSize + 1),
+            random_string(gen, max_buffer)};
+        auto [es, statusIgnored] = create_server(bufferSize, default_port, 5);
+        ServerRunner runner{es};
+        for (size_t i = 0; i < 1024; ++i) {
+            for (auto const& m : messages) {
+                std::string const str = send_receive(ioContext, es.get(), m);
+                EXPECT_EQ(str, m.substr(0, bufferSize));
+            }
         }
-        char                      buffer[1024 * 1024];
-        boost::system::error_code error;
-        auto const                length = socket.read_some(boost::asio::buffer(buffer), error);
-        if (shutdown == ShutdownWhen::AfterReceive) {
-            return;
-        }
-        boost::asio::write(socket, boost::asio::buffer(buffer, length));
-    }};
-    return t;
-}
-
-EchoServerStatus expect_no_call(EchoServer* ec, char const* const message) {
-    bool called = false;
-    auto status = ec_send_and_receive(ec, "some message", [](void* const flag, char const*, size_t) { *static_cast<bool*>(flag) = true; }, &called);
-    EXPECT_FALSE(called);
-    return status;
-}
-} // namespace
-
-TEST(EchoServer, SendAndReceive) {
-    size_t const bufferSize  = 20;
-    auto [ec, statusIgnored] = echo::create_client("localhost", default_port, bufferSize);
-    boost::asio::io_context ioContext{1};
-
-    std::vector<std::string> messages{"a basic message", "a very very very very long message", std::string{bufferSize, 'c'}};
-    for (auto const& m : messages) {
-        auto        t = launch_mock_server(ioContext, default_port);
-        std::string str;
-        EXPECT_EQ(ec_send_and_receive(ec.get(), m.c_str(), [](void* const str, char const* buffer, size_t const n) { static_cast<std::string*>(str)->append(buffer, n); }, &str), EchoServerSuccess);
-        EXPECT_EQ(str, m.substr(0, bufferSize));
-        t.join();
+        EXPECT_THAT(runner.finish(), clean_server_exit());
     }
-}
-
-TEST(EchoServer, BadHostName) {
-    auto [ec, status] = echo::create_client("unknownhost", default_port, 20);
-    EXPECT_THAT(ec, testing::IsNull());
-    EXPECT_EQ(status, EchoServerFailedToResolveHost);
-}
-
-TEST(EchoServer, CannotConnect) {
-    auto [ec, statusIgnored] = echo::create_client("localhost", default_port, 20);
-    // server not started
-    EXPECT_EQ(expect_no_call(ec.get(), "a message"), EchoServerFailedToConnectToSocket);
-}
-
-TEST(EchoServer, CannotReceive) {
-    auto [ec, statusIgnored] = echo::create_client("localhost", default_port, 20);
-    boost::asio::io_context ioContext{1};
-    auto                    t = launch_mock_server(ioContext, default_port, ShutdownWhen::AfterAccept);
-    EXPECT_EQ(expect_no_call(ec.get(), "a message"), EchoServerFailedToReceive);
-    t.join();
 }
 
 TEST(EchoServer, Message) {
@@ -159,14 +100,16 @@ TEST(EchoServer, Message) {
     };
 
     Point const points[] = {
-        {EchoServerFailedToResolveHost, "failed.*resolve.*host"},
-        {EchoServerFailedToConnectToSocket, "failed.*connect.*socket"},
+        {EchoServerFailedToBind, "failed.*bind"},
+        {EchoServerFailedToListen, "failed.*listen"},
+        {EchoServerFailedToSelect, "failed.*select"},
+        {EchoServerFailedToAccept, "failed.*accept"},
+        {EchoServerFailedToRead, "failed.*read"},
         {EchoServerFailedToSend, "failed.*send"},
-        {EchoServerFailedToReceive, "failed.*receive"},
     };
 
     for (auto const& point : points) {
-        EXPECT_THAT(ec_error_message(point.status), testing::ContainsRegex(point.pattern));
+        EXPECT_THAT(es_error_message(point.status),
+                    testing::ContainsRegex(point.pattern));
     }
 }
-#endif
