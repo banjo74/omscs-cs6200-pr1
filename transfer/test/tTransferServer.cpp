@@ -2,6 +2,7 @@
 #include "ByteSource.hpp"
 #include "Bytes.hpp"
 #include "ServerPtr.hpp"
+#include "random_bytes.hpp"
 #include "random_seed.hpp"
 #include "transferserver.h"
 
@@ -19,14 +20,6 @@ using namespace transfer::test;
 
 namespace {
 unsigned short const default_port = 14757;
-
-template <typename Rng>
-Bytes random_bytes(Rng& rng, size_t const s) {
-    std::uniform_int_distribution<uint8_t> dist;
-    Bytes                                  out(s);
-    std::ranges::generate(out, [&dist, &rng] { return std::byte{dist(rng)}; });
-    return out;
-}
 } // namespace
 
 TEST(TransferServer, CreateAndDestroy) {
@@ -78,7 +71,7 @@ TEST(TransferServer, BasicTest) {
     boost::asio::io_context  ioContext{1};
     std::mt19937             gen{random_seed()};
     std::vector<Bytes> const bytess{
-        //        Bytes{},
+        Bytes{},
         Bytes(10, std::byte{0}),
         random_bytes(gen, 1024 * 1024),
     };

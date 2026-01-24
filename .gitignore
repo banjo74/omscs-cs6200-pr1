@@ -6,6 +6,9 @@ echo/student.zip
 echo/echoclient
 echo/echoserver
 
+transfer/transferclient
+transfer/transferserver
+
 gflib/student.zip
 mtgf/student.zip
 

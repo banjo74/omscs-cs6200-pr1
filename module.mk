@@ -78,7 +78,7 @@ OBJS         := $(sort $(SRCCOBJS) $(SRCCPPOBJS)) $(sort $(TESTCOBJS) $(TESTCPPO
 
 DEPFILE       = $(patsubst %.o,%.d,$(1))
 
-CFLAGS = -c $< -o $@ -O2 -g -Wpedantic -Wall -Werror -MMD -MF $(call DEPFILE,$@) -MP
+CFLAGS = -c $< -o $@ $(if $(DEBUG),-O0,-O2) -g -Wpedantic -Wall -Werror -MMD -MF $(call DEPFILE,$@) -MP
 
 $(SRCCOBJS) $(TESTCOBJS) $(MAINCOBJ) : CFLAGS+=-std=c99 
 $(SRCCPPOBJS) $(TESTCPPOBJS) $(MAINCPPOBJ) : CFLAGS+=-std=c++20 

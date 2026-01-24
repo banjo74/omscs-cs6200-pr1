@@ -2,6 +2,7 @@
 #include "ByteSink.hpp"
 #include "Bytes.hpp"
 #include "ClientPtr.hpp"
+#include "random_bytes.hpp"
 #include "random_seed.hpp"
 #include "transferclient.h"
 
@@ -20,14 +21,6 @@ using namespace transfer::test;
 
 namespace {
 unsigned short const default_port = 14757;
-
-template <typename Rng>
-Bytes random_bytes(Rng& rng, size_t const s) {
-    std::uniform_int_distribution<uint8_t> dist;
-    Bytes                                  out(s);
-    std::ranges::generate(out, [&dist, &rng] { return std::byte{dist(rng)}; });
-    return out;
-}
 } // namespace
 
 TEST(TransferClient, CreateAndDestroy) {
