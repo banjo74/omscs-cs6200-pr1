@@ -24,10 +24,7 @@ typedef enum TransferServerStatusTag TransferServerStatus;
 
 // Create an TransferServer listening on port.  Upon success, the server will be
 // returned and will be in listening mode and should be accessible for connect
-// () (call to ec_send_and_receive)
-//
-// with each connection, the server will read at most maximumMessageLength
-// characters and send them back to the client.
+// () (call to tc_receive).
 //
 // Upon failure the returned value is NULL and statusOut is set to the failure
 // status. statusOut must point to a valid address even on success.
@@ -46,16 +43,17 @@ typedef bool (*ContinueFcn)(void*);
 typedef void (*LogFcn)(void*, TransferServerStatus);
 
 // Start running the server.  While the server is in listen mode after calling
-// ec_create, no connections will be accepted until ts_run is executed.  ts_run
+// ts_create, no connections will be accepted until ts_run is executed.  ts_run
 // will continue accepting connections from clients or until
 // continueFcn(continueFcnData) returns false.  If continueFcn is null,
-// continueFcnData is ignored and runs forever.
+// continueFcnData is ignored and the server runs forever.
+//
+// with each connection, the server sends all data provied from source (see
+// TransferSource below).
 //
 // If server enounters an error while running (send error, receive error, etc.)
 // logFcn(logFcnData, status) is called.  If logFcn is null, there is no
 // logging.
-//
-// The server may be restarted after receiving a quit message.
 TransferServerStatus ts_run(TransferServer*,
                             TransferSource* source,
                             ContinueFcn     continueFcn,
@@ -63,51 +61,85 @@ TransferServerStatus ts_run(TransferServer*,
                             LogFcn          logFcn,
                             void*           logFcnData);
 
-// force the server to stop
-void ts_stop(TransferServer*);
-
 // destroy the server.
 void ts_destroy(TransferServer*);
 
 // given a status return a descriptive error message
 char const* ts_error_message(TransferServerStatus);
 
+// See TransferSource below.
 typedef void* (*TransferSourceStartFcn)(void* sourceData);
 
+// See TransferSource below.
 typedef ssize_t (*TransferSourceReadFcn)(void*  sourceData,
                                          void*  sessionData,
                                          void*  buffer,
                                          size_t max);
 
+// See TransferSource below.
 typedef int (*TransferSourceFinishFcn)(void* sourceData, void* sessionData);
 
 /*!
+ TransferSource is an abstraction of a data source
  */
 struct TransferSourceTag {
-    TransferSourceStartFcn  startFcn;
-    TransferSourceReadFcn   readFcn;
+    // session = source->startFcn(source->sourceData);
+    // starts a data read session, the returned value may be used
+    // with readFcn.  source_start is a convience call to this function.
+    TransferSourceStartFcn startFcn;
+
+    // nRead = source->readFcn(source->sourceData, session, buffer, maxToRead);
+    // reads up to maxToRead bytes into buffer for session.
+    // should update session state so that the next call to readFcn
+    // will read the next bytes.
+    //
+    // returns the number of bytes read.
+    // returns 0 to indicate that its done reading
+    //
+    // returns negative value on failure
+    //
+    // source_read is a convience call to this function.
+    TransferSourceReadFcn readFcn;
+
+    // source->finishFcn(source->sourceData, session)
+    // terminates the session.  releases any resources used by the
+    // session and invalidates session
+    //
+    // source_finish is a convience call to this function.
     TransferSourceFinishFcn finishFcn;
-    void*                   sourceData;
+
+    // client data.
+    void* sourceData;
 };
 
+// initialize a TransferSource with the provided, start, read, finish, and data.
 void source_initialize(TransferSource* emptyClient,
                        TransferSourceStartFcn,
                        TransferSourceReadFcn,
                        TransferSourceFinishFcn,
                        void* sourceData);
 
+// start a session.  see startFcn in TransferSource above
 void* source_start(TransferSource* source);
 
+// read some data.  see readFcn in TransferSource above
 ssize_t source_read(TransferSource* source, void*, void*, size_t);
 
+// finish a session, see finishFcn in TransferSource above
 int source_finish(TransferSource* source, void*);
 
+// a wrapper around TransferSource to for file reading
 typedef struct FileTransferSourceTag FileTransferSource;
 
+// create a FileTransferSource that reads fileName with each session
+// will succeed even if fileName doesn't exist but start on the underlying
+// source will fail
 FileTransferSource* fsource_create(char const* fileName);
 
+// get the underlying TransferSource
 TransferSource* fsource_source(FileTransferSource*);
 
+// destroy the file transfer source
 void fsource_destroy(FileTransferSource*);
 
 // HEADER_END
@@ -242,7 +274,7 @@ static void set_socket_reusable_(int const socketFd) {
 }
 
 // search through address info for a socket that will accept our connection.
-// returns -1 on failure.  ec->addressInfo must be valid.
+// returns -1 on failure.  tc->addressInfo must be valid.
 static int create_and_bind_to_socket_(struct addrinfo*        ai,
                                       struct addrinfo** const usedAddr) {
     assert(ai);

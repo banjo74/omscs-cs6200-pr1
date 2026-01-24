@@ -19,9 +19,11 @@ typedef enum {
     TransferClientFailedToConnect
 } TransferClientStatus;
 
-// Create a tc client and resolve the host name and port and return the client.
+// Create a TransferClient and resolve the host name and port and return the
+// client.
+//
 // Upon success:
-// *statuc == TransferClientSuccess
+// *status == TransferClientSuccess
 // A transfer client ready for tc_receive
 // The returned TransferClient must be destroyed with tc_destroy
 TransferClient* tc_create(TransferClientStatus* status,
@@ -29,8 +31,7 @@ TransferClient* tc_create(TransferClientStatus* status,
                           unsigned short        port);
 
 // connect to the host provied to tc_create and retrieve the data it provides.
-// retrieved ata is sent to receiveFcn.
-// userData is the first function
+// retrieved data is sent to the sink.  See TransferSink below.
 TransferClientStatus tc_receive(TransferClient*, TransferSink* sink);
 
 // destroy the provided client
@@ -38,25 +39,52 @@ void tc_destroy(TransferClient*);
 
 typedef void* (*TransferSinkStartFcn)(void* sinkData);
 
+// see TransferSink below
 typedef ssize_t (*TransferSinkSendFcn)(void*       sinkData,
                                        void*       sessionData,
                                        void const* buffer,
                                        size_t      n);
 
+// see TransferSink below
 typedef void (*TransferSinkCancelFcn)(void* sinkData, void* sessionData);
 
+// see TransferSink below
 typedef int (*TransferSinkFinishFcn)(void* sinkData, void* sessionData);
 
 /*!
+ TransferSink is an abstraction of a data sink
  */
 struct TransferSinkTag {
-    TransferSinkStartFcn  startFcn;
-    TransferSinkSendFcn   sendFcn;
+    // session = sink->startFcn(sink->sinkData);
+    // starts a data read session, the returned value may be used
+    // with sendFcn.  sink_start is a convience call to this function.
+    TransferSinkStartFcn startFcn;
+
+    // nWritten = sink->sendFcn(sink, session, buffer, nBytes)
+    // sends nBytes pointed to by buffer to the sink for this session.
+    // upon success nWritten == nBytes
+    //
+    // sink_send is a convience call to this function
+    TransferSinkSendFcn sendFcn;
+
+    // sink->cancelFcn(sink->sinkData, session)
+    // cancels the current session leaving no side effects
+    //
+    // sink_cancel is a convience call to this function
     TransferSinkCancelFcn cancelFcn;
+
+    // sink->finishFcn(sink->sinkData, session)
+    // successfully finishes the session.
+    //
+    // sink_finish is a convience call to this function
     TransferSinkFinishFcn finishFcn;
-    void*                 sinkData;
+
+    // client data
+    void* sinkData;
 };
 
+// initialize an empty sink with the provided start, send, cancel, finish, and
+// data.
 void sink_initialize(TransferSink* emptyClient,
                      TransferSinkStartFcn,
                      TransferSinkSendFcn,
@@ -64,20 +92,31 @@ void sink_initialize(TransferSink* emptyClient,
                      TransferSinkFinishFcn,
                      void* sinkData);
 
+// see startFcn in TransferSink above
 void* sink_start(TransferSink* sink);
 
+// see sendFcn in TransferSink above
 ssize_t sink_send(TransferSink* sink, void*, void const*, size_t);
 
+// see cancelFcn in TransferSink above
 void sink_cancel(TransferSink* sink, void*);
 
+// see finishFcn in TransferSink above
 int sink_finish(TransferSink* sink, void*);
 
+// a wrapper around TransferSink to for file writing
 typedef struct FileTransferSinkTag FileTransferSink;
 
-FileTransferSink* fsink_create(char const*);
+// create a FileTransferSink ready to write to fileName
+// each sink session will write to the provided file name
+// if the sink is canceled, the file will be unlinked, even
+// if it existed before writing started
+FileTransferSink* fsink_create(char const* fileName);
 
+// get the underlying sink
 TransferSink* fsink_sink(FileTransferSink*);
 
+// destroy the sink
 void fsink_destroy(FileTransferSink*);
 
 // HEADER_END
