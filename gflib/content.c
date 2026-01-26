@@ -1,92 +1,98 @@
-#include <stdio.h>
+
+#define _DEFAULT_SOURCE
+
 #include <sys/stat.h>
-#include <string.h>
-#include <stdlib.h>
+
 #include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define MAX_KEYLEN 256
 
-typedef struct{
-	int fildes;
-	char key[MAX_KEYLEN];
+typedef struct {
+    int  fildes;
+    char key[MAX_KEYLEN];
 } item_t;
 
-static int nitems;
-static item_t *items;
+static int     nitems;
+static item_t* items;
 
-static int _itemcmp(const void *a, const void *b){
-	return strcmp(((item_t*) a)->key,((item_t*) b)->key);
+static int _itemcmp(void const* a, void const* b) {
+    return strcmp(((item_t*)a)->key, ((item_t*)b)->key);
 }
 
-int content_init(const char *filename){
-	FILE *filelist;
-	int capacity = 16;
-	char *path, *ptr;
+int content_init(char const* filename) {
+    FILE* filelist;
+    int   capacity = 16;
+    char *path, *ptr;
 
-	if( NULL == (filelist = fopen(filename, "r"))){
-		fprintf(stderr, "Unable to open file in content_init.\n");
-		exit(EXIT_FAILURE);
-	}
+    if (NULL == (filelist = fopen(filename, "r"))) {
+        fprintf(stderr, "Unable to open file in content_init.\n");
+        exit(EXIT_FAILURE);
+    }
 
-	items = (item_t*) malloc(capacity * sizeof(item_t));
-	nitems = 0;
-	while(fgets(items[nitems].key, MAX_KEYLEN, filelist)){
-		/*Taking out EOL character*/
-		items[nitems].key[strlen(items[nitems].key)-1] = '\0';
+    items  = (item_t*)malloc(capacity * sizeof(item_t));
+    nitems = 0;
+    while (fgets(items[nitems].key, MAX_KEYLEN, filelist)) {
+        /*Taking out EOL character*/
+        items[nitems].key[strlen(items[nitems].key) - 1] = '\0';
 
-		/* Using space delimiter to sep key and path*/
-		ptr = items[nitems].key;
-		strsep(&ptr, " \t"); 		/* The key is first */
-		path = strsep(&ptr, " \t"); /* The path second */
+        /* Using space delimiter to sep key and path*/
+        ptr = items[nitems].key;
+        strsep(&ptr, " \t");        /* The key is first */
+        path = strsep(&ptr, " \t"); /* The path second */
 
-		if( 0 > (items[nitems].fildes = open(path, O_RDONLY))){
-			fprintf(stderr, "Unable to open file %s.\n", path);
-			exit(EXIT_FAILURE);
-		}
-		nitems++;
+        if (0 > (items[nitems].fildes = open(path, O_RDONLY))) {
+            fprintf(stderr, "Unable to open file %s.\n", path);
+            exit(EXIT_FAILURE);
+        }
+        nitems++;
 
-		if(nitems == capacity){
-			capacity *= 2;
-			items = realloc(items, capacity * sizeof(item_t));
-		}
+        if (nitems == capacity) {
+            capacity *= 2;
+            items = realloc(items, capacity * sizeof(item_t));
+        }
+    }
 
-	}
+    fclose(filelist);
 
-	fclose(filelist);
+    qsort(items, nitems, sizeof(item_t), _itemcmp);
 
-	qsort(items, nitems, sizeof(item_t), _itemcmp);
-
-	return EXIT_SUCCESS;
+    return EXIT_SUCCESS;
 }
 
-int content_get(const char *key){
-	int lo = 0;
-	int hi = nitems - 1;
-	int mid, cmp;
+int content_get(char const* key) {
+    int lo = 0;
+    int hi = nitems - 1;
+    int mid, cmp;
 
 #if defined(DELAY)
-	usleep(DELAY); // simulate slow I/O subsystem
-#endif // DELAY
+    usleep(DELAY); // simulate slow I/O subsystem
+#endif             // DELAY
 
-	while (lo <= hi) {
-		// Key is in items[lo..hi] or not present.
-		mid = lo + (hi - lo) / 2;
-		cmp = strcmp(key,items[mid].key);
-		if ( cmp < 0) hi = mid - 1;
-		else if (cmp > 0) lo = mid + 1;
-		else{
-			lseek(items[mid].fildes, 0, SEEK_SET);
-			return items[mid].fildes;
-		} 
-	}
-	return -1;
+    while (lo <= hi) {
+        // Key is in items[lo..hi] or not present.
+        mid = lo + (hi - lo) / 2;
+        cmp = strcmp(key, items[mid].key);
+        if (cmp < 0) {
+            hi = mid - 1;
+        } else if (cmp > 0) {
+            lo = mid + 1;
+        } else {
+            lseek(items[mid].fildes, 0, SEEK_SET);
+            return items[mid].fildes;
+        }
+    }
+    return -1;
 }
 
-void content_destroy(){
-	int i;
-	for(i = 0; i < nitems; i++)
-		close(items[i].fildes);
-	
-	free(items);
+void content_destroy() {
+    int i;
+    for (i = 0; i < nitems; i++) {
+        close(items[i].fildes);
+    }
+
+    free(items);
 }
