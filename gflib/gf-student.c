@@ -7,7 +7,9 @@
 
 #include <assert.h>
 #include <memory.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /////////////////////////////////////////////////////////
@@ -25,12 +27,19 @@ struct TokenizerTag {
     size_t bufferCapacity;
     size_t startOfCurrent;
     size_t bufferCursor;
+
+    size_t numberValue;
 };
 
 struct ActionTag {
+    // state to transition to
     uint8_t toState        : 7;
+    // should we reset recording the current string or number with this
+    // transition
     uint8_t resetRecording : 1;
-    TokenId token          : 8;
+    // token finished with this transition.  Set to UnknownToken when there is
+    // no token.
+    int8_t token;
 };
 typedef struct ActionTag Action;
 
@@ -77,11 +86,19 @@ void push_token_(Tokenizer* const tok, Token const token) {
     tok->tokens[tok->numTokens++] = token;
 }
 
+bool tok_done(Tokenizer const* tok) {
+    return tok->state == 2;
+}
+
+bool tok_invalid(Tokenizer const* tok) {
+    return tok->state == 1;
+}
+
 ssize_t tok_process(Tokenizer* const  tok,
                     char const* const buffer,
                     size_t const      n) {
     size_t i = 0;
-    for (; i < n && tok->state != 1 && tok->state != 2; ++i) {
+    for (; i < n && !tok_done(tok) && !tok_invalid(tok); ++i) {
         Action const* const action = get_action_(tok->state, buffer[i]);
         tok->state                 = action->toState;
         switch (action->token) {
@@ -98,11 +115,8 @@ ssize_t tok_process(Tokenizer* const  tok,
             break;
         }
         case SizeToken: {
-            push_char_(tok, '\0');
-            Token const token = {
-                .id = SizeToken,
-                .data.size =
-                    strtoull(tok->buffer + tok->startOfCurrent, NULL, 10)};
+            Token const token = {.id        = SizeToken,
+                                 .data.size = tok->numberValue};
             push_token_(tok, token);
             break;
         }
@@ -118,8 +132,17 @@ ssize_t tok_process(Tokenizer* const  tok,
         }
         if (action->resetRecording) {
             tok->bufferCursor = tok->startOfCurrent;
+            tok->numberValue  = 0;
         }
+        // just push the character and update the number regardless of what
+        // state we're in.  we could add more data to the table to tell us when
+        // this is necessary but it doesn't cost us much to do it all of the
+        // time and the text of the table is big enough already.  note that most
+        // transitions reset recording so we not actually accumulating a lot of
+        // characters.
         push_char_(tok, buffer[i]);
+        tok->numberValue *= 10;
+        tok->numberValue += buffer[i] - '0';
     }
     if (tok->state == 1) {
         return -1;
@@ -141,6 +164,7 @@ void tok_reset(Tokenizer* const tok) {
     tok->numTokens      = 0;
     tok->startOfCurrent = 0;
     tok->bufferCursor   = 0;
+    tok->numberValue    = 0;
 }
 
 void tok_destroy(Tokenizer* const tok) {
@@ -154,6 +178,110 @@ void tok_destroy(Tokenizer* const tok) {
 char const* tok_str(TokenId const id) {
     static char const* const names[] = {TOKEN_ID(TOKEN_ID_STR)};
     return names[id];
+}
+
+/////////////////////////////////////////////////////////
+// Headers
+/////////////////////////////////////////////////////////
+
+static char const* terminator_() {
+    return "\r\n\r\n";
+}
+
+int snprintf_request_get(char* const       buffer,
+                         size_t const      n,
+                         RequestGet const* request) {
+    return snprintf(
+        buffer, n, "GETFILE GET %s%s", request->path, terminator_());
+}
+
+int unpack_request_get(Tokenizer const* const tok, RequestGet* const request) {
+    if (
+        // must be done
+        !tok_done(tok) ||
+        // must have 3 tokens
+        tok_num_tokens(tok) != 3 ||
+        // GETFILE
+        tok_token(tok, 0).id != GetfileToken ||
+        // GET
+        tok_token(tok, 1).id != GetToken ||
+        // PATH
+        tok_token(tok, 2).id != PathToken) {
+        return -1;
+    }
+    request->path = tok_token(tok, 2).data.path;
+    return 0;
+}
+
+char const* status_text_(ResponseStatus const s) {
+    static char const* const text[] = {
+        "OK", "FILE_NOT_FOUND", "ERROR", "INVALID"};
+    return text[s];
+}
+
+int snprintf_response(char* const     buffer,
+                      size_t const    n,
+                      Response const* response) {
+    if (response->status == OkResponse) {
+        return snprintf(buffer,
+                        n,
+                        "GETFILE %s %lu%s",
+                        status_text_(response->status),
+                        response->size,
+                        terminator_());
+    }
+    return snprintf(buffer,
+                    n,
+                    "GETFILE %s%s",
+                    status_text_(response->status),
+                    terminator_());
+}
+
+/// map a TokenId to a status.  return UnknownResponse if the TokenId doesn't
+/// map to any status.
+ResponseStatus token_to_status(TokenId const id) {
+#define OUTPUT_CASE(Id) \
+    case Id##Token:     \
+        return Id##Response
+    switch (id) {
+        OUTPUT_CASE(Ok);
+        OUTPUT_CASE(FileNotFound);
+        OUTPUT_CASE(Error);
+        OUTPUT_CASE(Invalid);
+    default:
+        return UnknownResponse;
+    }
+#undef OUTPUT_CASE
+}
+
+int unpack_response(Tokenizer const* const tok, Response* const request) {
+    if (
+        // must be done
+        !tok_done(tok) ||
+        // must have at lest 2 tokens
+        tok_num_tokens(tok) < 2 ||
+        // GETFILE
+        tok_token(tok, 0).id != GetfileToken) {
+        return -1;
+    }
+    ResponseStatus const status = token_to_status(tok_token(tok, 1).id);
+    if (status == UnknownResponse) {
+        return -1;
+    }
+
+    if (status == OkResponse) {
+        if (tok_num_tokens(tok) != 3 || tok_token(tok, 2).id != SizeToken) {
+            return -1;
+        }
+        request->size = tok_token(tok, 2).data.size;
+    } else {
+        if (tok_num_tokens(tok) != 2) {
+            return -1;
+        }
+        request->size = 0;
+    }
+    request->status = status;
+    return 0;
 }
 
 Action const* get_action_(uint8_t const state, char const c) {
@@ -2071,7 +2199,6 @@ Action const* get_action_(uint8_t const state, char const c) {
          {1, 0, UnknownToken}, {1, 0, UnknownToken}, {1, 0, UnknownToken},
          {1, 0, UnknownToken}, {1, 0, UnknownToken}, {1, 0, UnknownToken},
          {1, 0, UnknownToken}, {1, 0, UnknownToken}}};
-
     if (c >= 128) {
         return NULL;
     }
