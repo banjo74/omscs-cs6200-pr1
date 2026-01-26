@@ -39,6 +39,8 @@ TESTEXE      := $(TESTBINDIR)/test
 TESTTS       := $(TESTTSDIR)/$(MODNAME).unit.ts
 SYSTEMTESTTS := $(TESTTSDIR)/$(MODNAME).system.ts
 
+EMBEDDEDOBJS := $(call ALLFILESWITHEXTENSION,o)
+
 SRCCOBJS     := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCCFILES))
 SRCCPPOBJS   := $(patsubst %.cpp,$(OBJDIR)/%.o,$(SRCCPPFILES))
 TESTCOBJS    := $(patsubst %.c,$(OBJDIR)/%.o,$(TESTCFILES))
@@ -54,7 +56,7 @@ MAINOBJS     := $(sort $(MAINCOBJS) $(MAINCPPOBJS))
 EXE          := $(patsubst $(OBJDIR)/%_main.o,$(BINDIR)/%,$(MAINOBJS))
 $(info $(EXE))
 
-GENHDRFROM   := $(shell grep -l HEADER_START $(SRCCFILES))
+GENHDRFROM   := $(if $(SRCCFILES),$(shell grep -l HEADER_START $(SRCCFILES)))
 GENHDR       := $(patsubst %.c,$(GENHDRDIR)/%.h,$(GENHDRFROM))
 
 $(GENHDR) : $(GENHDRDIR)/%.h : %.c $(MAKEFILE_LIST) | $(GENHDRDIR)
@@ -80,8 +82,8 @@ DEPFILE       = $(patsubst %.o,%.d,$(1))
 
 CFLAGS = -c $< -o $@ $(if $(DEBUG),-O0,-O2) -g -Wpedantic -Wall -Werror -MMD -MF $(call DEPFILE,$@) -MP
 
-$(SRCCOBJS) $(TESTCOBJS) $(MAINCOBJ) : CFLAGS+=-std=c99 
-$(SRCCPPOBJS) $(TESTCPPOBJS) $(MAINCPPOBJ) : CFLAGS+=-std=c++20 
+$(SRCCOBJS) $(TESTCOBJS) $(MAINCOBJS) : CFLAGS+=-std=c99 
+$(SRCCPPOBJS) $(TESTCPPOBJS) $(MAINCPPOBJS) : CFLAGS+=-std=c++20 
 
 $(SRCCOBJS) $(SRCCPPOBJS) : CFLAGS+=-DTEST_MODE=1
 
@@ -103,12 +105,17 @@ $(MAINCPPOBJS) : $(OBJDIR)/%_main.o : %.cpp
 $(TESTEXE) : $(OBJS) $(MAKEFILE_LIST) | $(TESTBINDIR)
 	g++ -o $@ $(OBJS) $(GOOGLETEST_ROOT)/build/lib/libgmock.a $(GOOGLETEST_ROOT)/build/lib/libgtest.a
 
-EXESRCOBJ := $(sort \
-  $(filter-out $(patsubst %.c,%.o,$(MAINC)),$(SRCCOBJ)) \
-  $(filter-out $(patsubst %.cpp,%.o,$(MAINCPP)),$(SRCCPPOBJ)))
+# if an embedded obj file has a corresponding _noasan.o file, then 
+# just link in the _nosasan.o file.
+NOASANEMBEDDEDOBJS := $(filter %_noasan.o,$(EMBEDDEDOBJS))
+EMBEDEDDOBJS       := $(filter-out $(patsubst %_noasan.o,%.o,$(NOASANEMBEDDEDOBJS)),$(EMBEDDEDOBJS))
 
-$(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJ) | $(BINDIR)
-	g++ -o $@ $< $(EXESRCOBJS)
+EXESRCOBJS := $(sort \
+  $(filter-out $(patsubst %.c,%.o,$(MAINC)),$(SRCCOBJS)) \
+  $(filter-out $(patsubst %.cpp,%.o,$(MAINCPP)),$(SRCCPPOBJS)))
+
+$(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJS) $(EMBEDEDDOBJS) | $(BINDIR)
+	g++ -o $@ $< $(EXESRCOBJS) $(EMBEDEDDOBJS)
 
 $(TESTTS) : $(TESTEXE) | $(TESTTSDIR)
 	$(RM) $@
