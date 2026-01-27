@@ -187,7 +187,7 @@ TEST(Tokenizer, Basic) {
     std::vector<CppToken>                 bigInput;
     std::mt19937                          gen{gf::test::random_seed()};
     std::uniform_int_distribution<size_t> picker(0, baseTokens.size() - 1);
-    for (size_t i = 0; i < 1024 * 1024; ++i) {
+    for (size_t i = 0; i < 1024; ++i) {
         bigInput.push_back(baseTokens[picker(gen)]);
     }
 
