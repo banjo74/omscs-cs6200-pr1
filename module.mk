@@ -111,8 +111,8 @@ NOASANEMBEDDEDOBJS := $(filter %_noasan.o,$(EMBEDDEDOBJS))
 EMBEDEDDOBJS       := $(filter-out $(patsubst %_noasan.o,%.o,$(NOASANEMBEDDEDOBJS)),$(EMBEDDEDOBJS))
 
 EXESRCOBJS := $(sort \
-  $(filter-out $(patsubst %.c,%.o,$(MAINC)),$(SRCCOBJS)) \
-  $(filter-out $(patsubst %.cpp,%.o,$(MAINCPP)),$(SRCCPPOBJS)))
+  $(filter-out $(patsubst %.c,$(OBJDIR)/%.o,$(MAINC)),$(SRCCOBJS)) \
+  $(filter-out $(patsubst %.cpp,$(OBJDIR)/%.o,$(MAINCPP)),$(SRCCPPOBJS)))
 
 $(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJS) $(EMBEDEDDOBJS) | $(BINDIR)
 	g++ -o $@ $< $(EXESRCOBJS) $(EMBEDEDDOBJS)
@@ -130,7 +130,10 @@ $(SYSTEMTESTTS) : $(TESTTSDIR)/%_system.ts : test/%_system.pl $(TESTTS) $(EXE) |
 	touch $@
 
 
-build : $(OBJS) $(TESTEXE) $(TESTTS) $(EXE) $(SYSTEMTESTTS)
+build : $(OBJS) $(TESTEXE) $(EXE) 
+ifndef NORUNTESTS
+  build : $(TESTTS) $(SYSTEMTESTTS)
+endif
 
 .PHONY : clean
 clean : 
