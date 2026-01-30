@@ -40,9 +40,9 @@ typedef bool (*ContinueFcn)(void*);
 // function used with es_run, below, to log error conditions
 typedef void (*LogFcn)(void*, EchoServerStatus);
 
-// Start running the server.  While the server is in listen mode after calling
-// ec_create, no connections will be accepted until es_run is executed.  es_run
-// will continue accepting connections from clients or until
+// Start running the server.  The server is in listen mode after calling
+// ec_create but no connections will be accepted until es_run is executed.
+// es_run will continue accepting connections from clients or until
 // continueFcn(continueFcnData) returns false.  If continueFcn is null,
 // continueFcnData is ignored and runs forever.
 //
@@ -50,15 +50,13 @@ typedef void (*LogFcn)(void*, EchoServerStatus);
 // logFcn(logFcnData, status) is called.  If logFcn is null, there is no
 // logging.
 //
-// The server may be restarted after receiving a quit message.
+// The server may be restarted (rerunning es_run) on the same port after
+// continue function stops it.
 EchoServerStatus es_run(EchoServer*,
                         ContinueFcn continueFcn,
                         void*       continueFcnData,
                         LogFcn      logFcn,
                         void*       logFcnData);
-
-// force the server to stop
-void es_stop(EchoServer*);
 
 // destroy the server.
 void es_destroy(EchoServer*);
@@ -179,8 +177,9 @@ struct EchoServerTag {
 };
 
 // Wrapper around getaddrinfo.  Resolve addrinfo struct for serverName and port
-// using getaddrinfo mainly to support IPv4 and IPv6 plush other functions are
-// deprecated.
+// using getaddrinfo mainly to support IPv4 and IPv6 plus the other POSIX
+// address resolution functions are deprecated.  Note, if hostName is NULL,
+// resolves the localhost.
 static struct addrinfo* resolve_address_info_(char const*          hostName,
                                               unsigned short const port) {
     char portNumStr[16];
@@ -199,6 +198,7 @@ static struct addrinfo* resolve_address_info_(char const*          hostName,
     return newAddressInfo;
 }
 
+// avoid socket already in use errors when binding by marking socket reusable.
 static void set_socket_reusable_(int const socketFd) {
     int const optionValue = 1;
     setsockopt(
@@ -206,9 +206,11 @@ static void set_socket_reusable_(int const socketFd) {
 }
 
 // search through address info for a socket that will accept our connection.
-// returns -1 on failure.  ec->addressInfo must be valid.
+// sets *usedAddrOut to the first address to which we can successfully bind and
+// returns the socketId.  If no address can be bound to, return -1 and
+// *usedAddrOut is unmodified.
 static int create_and_bind_to_socket_(struct addrinfo*        ai,
-                                      struct addrinfo** const usedAddr) {
+                                      struct addrinfo** const usedAddrOut) {
     assert(ai);
     int socketFd = -1;
     for (; ai; ai = ai->ai_next) {
@@ -221,12 +223,13 @@ static int create_and_bind_to_socket_(struct addrinfo*        ai,
             close(socketFd);
             continue;
         }
-        *usedAddr = ai;
+        *usedAddrOut = ai;
         return socketFd;
     }
     return -1;
 }
 
+// helper to make a timeval given a total number of microseconds
 static struct timeval make_timeval_(suseconds_t usec) {
     struct timeval tv;
     memset(&tv, 0, sizeof(tv));
@@ -302,19 +305,19 @@ static ssize_t send_all_(int const         socketId,
 }
 
 // receive a block of data from socketId and then send it back to socketId
-// if receive or send fails, return -1
-// if the ammount of data read is limited by the block size, return 1
-// otherwise, if the ammount of data read was less than the block size, return 0
-static void receive_and_send_all_(int const    socketId,
+// Assume we just need one call to recv.  See:
+// https://piazza.com/class/mka6wqnuwdsr6/post/289
+// https://piazza.com/class/mka6wqnuwdsr6/post/122
+static void receive_and_send_all_(int const    acceptedSocket,
                                   size_t const maxMessageLength,
                                   LogFcn       logFcn,
                                   void* const  logFcnData) {
     char          buffer[maxMessageLength]; // C99
-    ssize_t const read = recv(socketId, buffer, maxMessageLength, 0);
+    ssize_t const read = recv(acceptedSocket, buffer, maxMessageLength, 0);
     if (read < 0) {
         log_(logFcn, logFcnData, EchoServerFailedToRead);
     }
-    if (send_all_(socketId, buffer, (size_t)read) != read) {
+    if (send_all_(acceptedSocket, buffer, (size_t)read) != read) {
         log_(logFcn, logFcnData, EchoServerFailedToRead);
     }
 }
@@ -324,8 +327,8 @@ static bool continue_(ContinueFcn fcn, void* data) {
     return fcn == NULL || fcn(data);
 }
 
-// wait es->timeout for a connect.  returns 0 if timeout. returns < 0 for error.
-// returns > 0 for pending connection.
+// wait es->timeout for a connect.  returns true for pending connection, false
+// for timeout or failure.
 static bool select_(EchoServer* es, LogFcn logFcn, void* logFcnData) {
     fd_set         localFdSet   = es->listenSet;
     struct timeval localTimeout = es->timeout;

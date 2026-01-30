@@ -19,7 +19,7 @@ typedef enum EchoClientStatusTag EchoClientStatus;
 // EchoClientFailedToResolveHost.
 //
 // Since the echo protocol stipulates that every send and receive is a new
-// connection, socekt conecctions are not created until ec_send_and_receive
+// connection, socket conecctions are not created until ec_send_and_receive
 // (once per call)
 //
 // statusOut must point to a valid address even on success.
@@ -27,11 +27,11 @@ EchoClient* ec_create(EchoClientStatus* statusOut,
                       char const*       hostName,
                       unsigned short    port);
 
+// abstraction for where received messages go in ec_send_and_receive.
 typedef void (*ReceiveFcn)(void*, char const*, size_t);
 
 // send message to the server and wait for a response.  upon receiving a
-// response send it to the file descriptor indicated by fid.  multiple calls to
-// write on the fid may occur.
+// response send it to receiveFcn passing receiveData along with it.
 EchoClientStatus ec_send_and_receive(EchoClient*,
                                      char const* message,
                                      ReceiveFcn  receiveFcn,
@@ -72,9 +72,12 @@ char const* ec_error_message(EchoClientStatus);
     "  -h                  Show this help message\n"
 
 #if !defined(TEST_MODE)
+// implementation of ReceiveFcn that sends messages to stdout.  no client data
+// needed for to_stdout_.
 static void to_stdout_(void* const  unused,
                        char const*  message,
                        size_t const messageSize) {
+    (void)unused;
     write(STDOUT_FILENO, message, messageSize);
 }
 
@@ -158,9 +161,6 @@ EXIT_POINT:
 }
 #endif
 
-/* Be prepared accept a response of this length */
-#define BUFSIZE 1024
-
 struct EchoClientTag {
     struct addrinfo* addressInfo;
 };
@@ -204,6 +204,8 @@ EchoClient* ec_create(EchoClientStatus* const status,
 
 // search through address info for a socket that will accept our connection.
 // returns -1 on failure.  ec->addressInfo must be valid.
+// addressInfo contains several options, e.g., IPv4 vs IPv6 or aliases.  use the
+// first that succeeds.
 static int create_and_connect_to_socket_(EchoClient* const ec) {
     assert(ec->addressInfo);
     int socketFid = -1;
@@ -221,10 +223,10 @@ static int create_and_connect_to_socket_(EchoClient* const ec) {
     return -1;
 }
 
-// push size data through the socket
-static EchoClientStatus push_through_socket_(int const         socketId,
-                                             char const* const buffer,
-                                             size_t const      size) {
+// send all data through the socket.
+static EchoClientStatus send_all_(int const         socketId,
+                                  char const* const buffer,
+                                  size_t const      size) {
     size_t numSent = 0;
     while (numSent < size) {
         int const rc = send(socketId, buffer + numSent, size - numSent, 0);
@@ -236,11 +238,15 @@ static EchoClientStatus push_through_socket_(int const         socketId,
     return EchoClientSuccess;
 }
 
+// read data from the socket and send to receiveFcn.  we expect the server to
+// close the socket when the message is done.  don't assume the message is the
+// same size as the one we sent.  the server may be tuncating it.
 static EchoClientStatus receive_and_redirect_(EchoClient* const ec,
                                               int const         socketId,
                                               ReceiveFcn        receiveFcn,
                                               void* const       receiveData) {
-    char    buffer[1024];
+    char buffer[1024]; // this buffer size doesn't need to match the buffer size
+                       // in the server.
     ssize_t numReceived = 0;
     while ((numReceived = recv(socketId, buffer, sizeof(buffer), 0)) > 0) {
         receiveFcn(receiveData, buffer, (size_t)numReceived);
@@ -264,7 +270,7 @@ EchoClientStatus ec_send_and_receive(EchoClient* const ec,
         goto EXIT_POINT;
     }
 
-    if ((status = push_through_socket_(socketFd, message, strlen(message))) !=
+    if ((status = send_all_(socketFd, message, strlen(message))) !=
         EchoClientSuccess) {
         goto EXIT_POINT;
     }
