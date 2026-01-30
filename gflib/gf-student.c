@@ -5,6 +5,8 @@
 
 #include "gf-student.h"
 
+#include <sys/socket.h>
+
 #include <assert.h>
 #include <memory.h>
 #include <stdbool.h>
@@ -19,15 +21,26 @@
 struct TokenizerTag {
     uint8_t state;
 
+    // a vector of tokens.  they are added with push_token_ below.
+    // there's a capacity, greater then numTokens, that is the total number of
+    // tokens we can hold before realloc.  push_token_ will handle the realloc.
+    // The token capacity is not reset with tok_reset.
     Token* tokens;
     size_t tokenCapacity;
     size_t numTokens;
 
+    // buffer to store generic strings.  each generic string is written to the
+    // the characters are written as they are processed.  when the end of the
+    // generic string is processed, a null terminator is added, and
+    // startOfCurrent moves to the next character in the buffer.
+    // push_char_ adds characters to this buffer and handles realloc's if
+    // needed.
     char*  buffer;
     size_t bufferCapacity;
     size_t startOfCurrent;
     size_t bufferCursor;
 
+    // the running value of decimal numbers as they are processed.
     size_t numberValue;
 };
 
@@ -53,19 +66,21 @@ Tokenizer* tok_create() {
     return out;
 }
 
-static Action const* get_action_(uint8_t state, char c);
-
 void push_char_(Tokenizer* const tok, char const c) {
     if (tok->bufferCursor == tok->bufferCapacity) {
+        // at capacity, realloc and update tokens to point into new buffer
         char const* const originalBufferPtr = tok->buffer;
 
-        tok->bufferCapacity = 2 * tok->bufferCapacity;
-        tok->buffer         = (char*)realloc(tok->buffer, tok->bufferCapacity);
+        tok->bufferCapacity *= 2;
+        tok->buffer = (char*)realloc(tok->buffer, tok->bufferCapacity);
         if (tok->buffer != originalBufferPtr) {
             for (size_t i = 0; i < tok->numTokens; ++i) {
                 if (tok->tokens[i].id == PathToken) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuse-after-free"
+                    // GCC gets a little nanny here.  we're just using the
+                    // previous address to update the pointers in tokens, if
+                    // any.
                     size_t const originalOffset =
                         tok->tokens[i].data.path - originalBufferPtr;
 #pragma GCC diagnostic pop
@@ -79,12 +94,20 @@ void push_char_(Tokenizer* const tok, char const c) {
 
 void push_token_(Tokenizer* const tok, Token const token) {
     if (tok->numTokens == tok->tokenCapacity) {
-        tok->tokenCapacity = 2 * tok->tokenCapacity;
+        // at capacity, realloc
+        tok->tokenCapacity *= 2;
         tok->tokens =
             (Token*)realloc(tok->tokens, sizeof(Token) * tok->tokenCapacity);
     }
     tok->tokens[tok->numTokens++] = token;
 }
+
+/*!
+ The table generator identifies 3 standard states:
+ 0: start
+ 1: done
+ 2: invalid
+ */
 
 bool tok_done(Tokenizer const* tok) {
     return tok->state == 2;
@@ -93,6 +116,10 @@ bool tok_done(Tokenizer const* tok) {
 bool tok_invalid(Tokenizer const* tok) {
     return tok->state == 1;
 }
+
+// get_action_ accesses the table, below.  Use the forward declaration to keep
+// the table at the bottom of the file.
+static Action const* get_action_(uint8_t state, char c);
 
 ssize_t tok_process(Tokenizer* const  tok,
                     char const* const buffer,
@@ -121,16 +148,22 @@ ssize_t tok_process(Tokenizer* const  tok,
             break;
         }
         case PathToken: {
+            // terminate the written path
             push_char_(tok, '\0');
+            // create and push the token
             Token const token = {
                 .id        = PathToken,
                 .data.path = tok->buffer + tok->startOfCurrent};
             push_token_(tok, token);
+            // update the start of current to be the next character in the
+            // buffer.
             tok->startOfCurrent = tok->bufferCursor;
             break;
         }
         }
         if (action->resetRecording) {
+            // actions tell us to reset recording.  this is either the beginning
+            // of a generic word (path) or a number (size).
             tok->bufferCursor = tok->startOfCurrent;
             tok->numberValue  = 0;
         }
@@ -144,7 +177,7 @@ ssize_t tok_process(Tokenizer* const  tok,
         tok->numberValue *= 10;
         tok->numberValue += buffer[i] - '0';
     }
-    if (tok->state == 1) {
+    if (tok_invalid(tok)) {
         return -1;
     }
     return i;
@@ -180,19 +213,19 @@ char const* tok_str(TokenId const id) {
     return names[id];
 }
 
+char const* tok_terminator() {
+    return "\r\n\r\n";
+}
+
 /////////////////////////////////////////////////////////
 // Headers
 /////////////////////////////////////////////////////////
-
-static char const* terminator_() {
-    return "\r\n\r\n";
-}
 
 int snprintf_request_get(char* const       buffer,
                          size_t const      n,
                          RequestGet const* request) {
     return snprintf(
-        buffer, n, "GETFILE GET %s%s", request->path, terminator_());
+        buffer, n, "GETFILE GET %s%s", request->path, tok_terminator());
 }
 
 int unpack_request_get(Tokenizer const* const tok, RequestGet* const request) {
@@ -228,18 +261,18 @@ int snprintf_response(char* const     buffer,
                         "GETFILE %s %lu%s",
                         status_text_(response->status),
                         response->size,
-                        terminator_());
+                        tok_terminator());
     }
     return snprintf(buffer,
                     n,
                     "GETFILE %s%s",
                     status_text_(response->status),
-                    terminator_());
+                    tok_terminator());
 }
 
 /// map a TokenId to a status.  return UnknownResponse if the TokenId doesn't
 /// map to any status.
-ResponseStatus token_to_status(TokenId const id) {
+ResponseStatus token_to_status_(TokenId const id) {
 #define OUTPUT_CASE(Id) \
     case Id##Token:     \
         return Id##Response
@@ -264,7 +297,7 @@ int unpack_response(Tokenizer const* const tok, Response* const request) {
         tok_token(tok, 0).id != GetfileToken) {
         return -1;
     }
-    ResponseStatus const status = token_to_status(tok_token(tok, 1).id);
+    ResponseStatus const status = token_to_status_(tok_token(tok, 1).id);
     if (status == UnknownResponse) {
         return -1;
     }
@@ -282,6 +315,25 @@ int unpack_response(Tokenizer const* const tok, Response* const request) {
     }
     request->status = status;
     return 0;
+}
+
+/////////////////////////////////////////////////////////
+// Socket Helpers
+/////////////////////////////////////////////////////////
+
+ssize_t sock_send_all(int const            socketId,
+                      uint8_t const* const buffer,
+                      size_t               n) {
+    ssize_t numSent = 0;
+    while (numSent < n) {
+        ssize_t const localSent =
+            send(socketId, buffer + numSent, n - numSent, 0);
+        if (localSent <= 0) {
+            return -1;
+        }
+        numSent += localSent;
+    }
+    return numSent;
 }
 
 Action const* get_action_(uint8_t const state, char const c) {
@@ -2199,7 +2251,7 @@ Action const* get_action_(uint8_t const state, char const c) {
          {1, 0, UnknownToken}, {1, 0, UnknownToken}, {1, 0, UnknownToken},
          {1, 0, UnknownToken}, {1, 0, UnknownToken}, {1, 0, UnknownToken},
          {1, 0, UnknownToken}, {1, 0, UnknownToken}}};
-    if (c >= 128) {
+    if (c >= sizeof(table[0]) / sizeof(table[0][0])) {
         return NULL;
     }
     return &table[state][(size_t)c];

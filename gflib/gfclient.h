@@ -3,17 +3,20 @@
 
 #include <unistd.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * gfclient is a client library for transferring files using the GETFILE
  * protocol.  The interface is inspired by libcurl's "easy" interface.
  */
 
-
-typedef enum{
-  GF_OK = 0,
-  GF_FILE_NOT_FOUND = (GF_OK + 1),
-  GF_ERROR = (GF_OK + 2),
-  GF_INVALID = (GF_OK + 3)
+typedef enum {
+    GF_OK             = 0,
+    GF_FILE_NOT_FOUND = (GF_OK + 1),
+    GF_ERROR          = (GF_OK + 2),
+    GF_INVALID        = (GF_OK + 3)
 } gfstatus_t;
 
 /*struct for a getfile request*/
@@ -22,7 +25,7 @@ typedef struct gfcrequest_t gfcrequest_t;
 /*
  * Returns the string associated with the input status
  */
-const char *gfc_strstatus(gfstatus_t status);
+char const* gfc_strstatus(gfstatus_t status);
 
 /*
  * This function must be the first one called as part of
@@ -30,21 +33,21 @@ const char *gfc_strstatus(gfstatus_t status);
  * passed into all subsequent library calls pertaining to
  * this requeest.
  */
-gfcrequest_t *gfc_create();
+gfcrequest_t* gfc_create();
 /*
  * Sets the port over which the request will be made.
  */
-void gfc_set_port(gfcrequest_t **gfr, unsigned short port);
+void gfc_set_port(gfcrequest_t** gfr, unsigned short port);
 
 /*
  * Sets the server to which the request will be sent.
  */
-void gfc_set_server(gfcrequest_t **gfr, const char* server);
+void gfc_set_server(gfcrequest_t** gfr, char const* server);
 
 /*
  * Sets the path of the file that will be requested.
  */
-void gfc_set_path(gfcrequest_t **gfr, const char* path);
+void gfc_set_path(gfcrequest_t** gfr, char const* path);
 
 /*
  * Sets the callback for received header.  The registered callback
@@ -57,17 +60,20 @@ void gfc_set_path(gfcrequest_t **gfr, const char* path);
  * contain the full header.  If this handler is NULL, it will not be
  * called (it is optional).
  */
-void gfc_set_headerfunc(gfcrequest_t **gfr, void (*headerfunc)(void *header_buffer, size_t header_buffer_length, void *handlerarg));
+void gfc_set_headerfunc(gfcrequest_t** gfr,
+                        void (*headerfunc)(void*  header_buffer,
+                                           size_t header_buffer_length,
+                                           void*  handlerarg));
 
 /*
  * Sets the third argument for all calls to the registered header callback.
  */
-void gfc_set_headerarg(gfcrequest_t **gfr, void *headerarg);
+void gfc_set_headerarg(gfcrequest_t** gfr, void* headerarg);
 
 /*
  * Sets the third argument for all calls to the registered write callback.
  */
-void gfc_set_writearg(gfcrequest_t **gfr, void *writearg);
+void gfc_set_writearg(gfcrequest_t** gfr, void* writearg);
 
 /*
  * Sets the callback for received chunks of the body.  The registered
@@ -81,7 +87,10 @@ void gfc_set_writearg(gfcrequest_t **gfr, void *writearg);
  * but rather calls this callback each time that it receives a chunk of data
  * from the server.
  */
-void gfc_set_writefunc(gfcrequest_t **gfr, void (*writefunc)(void *data_buffer, size_t data_buffer_length, void *handlerarg));
+void gfc_set_writefunc(gfcrequest_t** gfr,
+                       void (*writefunc)(void*  data_buffer,
+                                         size_t data_buffer_length,
+                                         void*  handlerarg));
 
 /*
  * Performs the transfer as described in the options.  Returns a value of 0
@@ -91,31 +100,30 @@ void gfc_set_writefunc(gfcrequest_t **gfr, void (*writefunc)(void *data_buffer, 
  * transfer is complete or an invalid header is returned), then a negative
  * integer will be returned.
  */
-int gfc_perform(gfcrequest_t **gfr);
+int gfc_perform(gfcrequest_t** gfr);
 
 /*
  * Returns the status of the response.
  */
-gfstatus_t gfc_get_status(gfcrequest_t **gfr);
+gfstatus_t gfc_get_status(gfcrequest_t** gfr);
 
 /*
  * Returns the length of the file as indicated by the response header.
  * Value is not specified if the response status is not OK.
  */
-size_t gfc_get_filelen(gfcrequest_t **gfr);
+size_t gfc_get_filelen(gfcrequest_t** gfr);
 
 /*
  * Returns actual number of bytes received before the connection is closed.
  * This may be distinct from the result of gfc_get_filelen when the response
  * status is OK but the connection is reset before the transfer is completed.
  */
-size_t gfc_get_bytesreceived(gfcrequest_t **gfr);
+size_t gfc_get_bytesreceived(gfcrequest_t** gfr);
 
 /*
  * Frees memory associated with the request.
  */
-void gfc_cleanup(gfcrequest_t **gfr);
-
+void gfc_cleanup(gfcrequest_t** gfr);
 
 /*
  * Sets up any global data structures needed for the library.
@@ -123,12 +131,13 @@ void gfc_cleanup(gfcrequest_t **gfr);
  */
 void gfc_global_init();
 
-
 /*
  * Cleans up any global data structures needed for the library.
  * Warning: this function may not be thread-safe.
  */
 void gfc_global_cleanup();
 
-
+#ifdef __cplusplus
+}
+#endif
 #endif

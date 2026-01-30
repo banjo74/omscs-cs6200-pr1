@@ -22,6 +22,7 @@ using namespace gf::test;
 
 namespace {
 unsigned short const default_port = 14757;
+std::string const    term{"\r\n\r\n"};
 } // namespace
 
 TEST(Client, CreateAndDestroy) {
@@ -32,6 +33,17 @@ TEST(Client, CreateAndDestroy) {
 }
 
 namespace {
+auto setup_acceptor(boost::asio::io_context& ioContext,
+                    unsigned short const     port) {
+    tcp::endpoint const endPoint{tcp::v4(), port};
+    auto                acceptor = std::make_shared<tcp::acceptor>(ioContext);
+    acceptor->open(endPoint.protocol());
+    acceptor->set_option(tcp::acceptor::reuse_address(true));
+    acceptor->bind(endPoint);
+    acceptor->listen(1);
+    return acceptor;
+}
+
 void shutdown(tcp::socket& socket) {
     boost::system::error_code error;
     socket.shutdown(tcp::socket::shutdown_send, error);
@@ -41,22 +53,37 @@ void shutdown(tcp::socket& socket) {
     }
 }
 
-std::thread launch_mock_server(boost::asio::io_context& ioContext,
-                               unsigned short const     port,
-                               Bytes                    toSend,
-                               size_t const             chunkSize,
-                               std::string&             pathRequested) {
-    tcp::endpoint const endPoint{tcp::v4(), port};
-    auto                acceptor = std::make_shared<tcp::acceptor>(ioContext);
-    acceptor->open(endPoint.protocol());
-    acceptor->set_option(tcp::acceptor::reuse_address(true));
-    acceptor->bind(endPoint);
-    acceptor->listen(1);
+RequestPtr setup_request(std::string const&   path,
+                         unsigned short const port = default_port) {
+    auto req = create_request();
+    set_port(req, port);
+    set_server(req, "localhost");
+    set_path(req, path.c_str());
+    return req;
+}
+
+void setup_write_fcn(RequestPtr& req, Bytes& sink) {
+    set_writefunc(req, [](void* buffer, size_t n, void* br) {
+        auto&            bytes    = *reinterpret_cast<Bytes*>(br);
+        std::byte const* toInsert = reinterpret_cast<std::byte const*>(buffer);
+        bytes.insert(bytes.end(), toInsert, toInsert + n);
+    });
+    set_writearg(req, &sink);
+}
+
+std::thread launch_mock_server(
+    boost::asio::io_context& ioContext,
+    unsigned short const     port,
+    Bytes                    toSend,
+    size_t const             chunkSize,
+    std::string&             pathRequested,
+    size_t const             numToSend = std::numeric_limits<size_t>::max()) {
     std::thread t{[&ioContext,
-                   acceptor = std::move(acceptor),
+                   acceptor = setup_acceptor(ioContext, port),
                    toSend   = std::move(toSend),
                    chunkSize,
-                   &pathRequested] {
+                   &pathRequested,
+                   numToSend] {
         tcp::socket socket{ioContext};
         acceptor->accept(socket);
         auto tok = create_tokenizer();
@@ -71,13 +98,17 @@ std::thread launch_mock_server(boost::asio::io_context& ioContext,
         pathRequested = request.path;
 
         std::string const header =
-            "GETFILE OK " + std::to_string(toSend.size()) + "\r\n\r\n";
+            "GETFILE OK " + std::to_string(toSend.size()) + term;
         Bytes bytes(header.size());
         memcpy(bytes.data(), header.data(), header.size());
-        bytes.insert(bytes.end(), toSend.begin(), toSend.end());
-        // add on some more data that the client should ignore
-        for (uint8_t i = 0; i < 128; ++i) {
-            bytes.push_back(std::byte{i});
+        bytes.insert(bytes.end(),
+                     toSend.begin(),
+                     toSend.begin() + std::min(toSend.size(), numToSend));
+        if (numToSend > toSend.size()) {
+            // add on some more data that the client should ignore
+            for (uint8_t i = 0; i < 128; ++i) {
+                bytes.push_back(std::byte{i});
+            }
         }
         // now send the bytes in chunks
         for (size_t sent = 0; sent < bytes.size(); sent += chunkSize) {
@@ -111,18 +142,9 @@ TEST(Client, Perform) {
             std::string const pathSent{"/a/b/c/d/d"};
             auto              t = launch_mock_server(
                 ioContext, default_port, bytes, chunkSize, pathRequested);
-            auto req = create_request();
-            set_port(req, default_port);
-            set_server(req, "localhost");
-            set_path(req, pathSent.c_str());
+            auto  req = setup_request(pathSent);
             Bytes bytesReceived;
-            set_writefunc(req, [](void* buffer, size_t n, void* br) {
-                auto&            bytes = *reinterpret_cast<Bytes*>(br);
-                std::byte const* toInsert =
-                    reinterpret_cast<std::byte const*>(buffer);
-                bytes.insert(bytes.end(), toInsert, toInsert + n);
-            });
-            set_writearg(req, &bytesReceived);
+            setup_write_fcn(req, bytesReceived);
             EXPECT_EQ(perform(req), 0);
             EXPECT_EQ(bytesReceived, bytes);
             EXPECT_EQ(get_filelen(req), bytes.size());
@@ -144,33 +166,27 @@ std::thread launch_mock_server_with_bad_status(
     unsigned short const     port,
     gfstatus_t               status,
     size_t const             chunkSize) {
-    tcp::endpoint const endPoint{tcp::v4(), port};
-    auto                acceptor = std::make_shared<tcp::acceptor>(ioContext);
-    acceptor->open(endPoint.protocol());
-    acceptor->set_option(tcp::acceptor::reuse_address(true));
-    acceptor->bind(endPoint);
-    acceptor->listen(1);
-    std::thread t{
-        [&ioContext, acceptor = std::move(acceptor), chunkSize, status] {
-            tcp::socket socket{ioContext};
-            acceptor->accept(socket);
+    std::thread t{[&ioContext,
+                   acceptor = setup_acceptor(ioContext, port),
+                   chunkSize,
+                   status] {
+        tcp::socket socket{ioContext};
+        acceptor->accept(socket);
 
-            std::string const header =
-                "GETFILE " + to_string(status) + "\r\n\r\n";
-            Bytes bytes(header.size());
-            memcpy(bytes.data(), header.data(), header.size());
-            for (size_t sent = 0; sent < bytes.size(); sent += chunkSize) {
-                using namespace std::chrono_literals;
-                boost::system::error_code error;
-                Bytes                     localBytes(
-                    bytes.begin() + sent,
-                    bytes.begin() + std::min(sent + chunkSize, bytes.size()));
-                boost::asio::write(
-                    socket, boost::asio::buffer(localBytes), error);
-                std::this_thread::sleep_for(5ms);
-            }
-            shutdown(socket);
-        }};
+        std::string const header = "GETFILE " + to_string(status) + term;
+        Bytes             bytes(header.size());
+        memcpy(bytes.data(), header.data(), header.size());
+        for (size_t sent = 0; sent < bytes.size(); sent += chunkSize) {
+            using namespace std::chrono_literals;
+            boost::system::error_code error;
+            Bytes                     localBytes(
+                bytes.begin() + sent,
+                bytes.begin() + std::min(sent + chunkSize, bytes.size()));
+            boost::asio::write(socket, boost::asio::buffer(localBytes), error);
+            std::this_thread::sleep_for(5ms);
+        }
+        shutdown(socket);
+    }};
     return t;
 }
 } // namespace
@@ -178,31 +194,15 @@ std::thread launch_mock_server_with_bad_status(
 TEST(Client, OtherStatus) {
     boost::asio::io_context ioContext{1};
 
-    std::mt19937             gen{random_seed()};
-    std::vector<Bytes> const bytess{
-        Bytes{},
-        Bytes(10, std::byte{0}),
-        random_bytes(gen, 1025),
-    };
-
     for (size_t const chunkSize : {1024, 5, 3, 1}) {
         for (auto const status : {GF_FILE_NOT_FOUND, GF_ERROR, GF_INVALID}) {
             std::string const pathSent{"/a/b/c/d/d"};
             auto              t = launch_mock_server_with_bad_status(
                 ioContext, default_port, status, chunkSize);
 
-            auto req = create_request();
-            set_port(req, default_port);
-            set_server(req, "localhost");
-            set_path(req, pathSent.c_str());
+            auto  req = setup_request(pathSent);
             Bytes bytesReceived;
-            set_writefunc(req, [](void* buffer, size_t n, void* br) {
-                auto&            bytes = *reinterpret_cast<Bytes*>(br);
-                std::byte const* toInsert =
-                    reinterpret_cast<std::byte const*>(buffer);
-                bytes.insert(bytes.end(), toInsert, toInsert + n);
-            });
-            set_writearg(req, &bytesReceived);
+            setup_write_fcn(req, bytesReceived);
 
             EXPECT_EQ(perform(req), 0) << to_string(status) << ":" << chunkSize;
             EXPECT_EQ(bytesReceived.size(), 0u)
@@ -213,6 +213,93 @@ TEST(Client, OtherStatus) {
                 << to_string(status) << ":" << chunkSize;
             EXPECT_EQ(get_status(req), status)
                 << to_string(status) << ":" << chunkSize;
+            t.join();
+        }
+    }
+}
+
+namespace {
+std::thread launch_mock_server_invalid_header(
+    boost::asio::io_context& ioContext,
+    unsigned short const     port,
+    std::string const        header) {
+    std::thread t{
+        [&ioContext, acceptor = setup_acceptor(ioContext, port), header] {
+            boost::system::error_code error;
+            tcp::socket               socket{ioContext};
+            acceptor->accept(socket);
+
+            Bytes bytes(header.size());
+            memcpy(bytes.data(), header.data(), header.size());
+            boost::asio::write(socket, boost::asio::buffer(bytes), error);
+            shutdown(socket);
+        }};
+    return t;
+}
+} // namespace
+
+TEST(Client, InvalidHeader) {
+    boost::asio::io_context ioContext{1};
+    std::string const       badHeaders[] = {"GET",
+                                            "   ",
+                                            "",
+                                            "GETFILE OK" + term,
+                                            "GETFILE GET" + term,
+                                            "GETFILE OK /a/b/a/b" + term,
+                                            "GETFILE OK 123456" + term.substr(0, 3)};
+    for (auto const& header : badHeaders) {
+        std::string const pathSent{"/a/b/c/d/d"};
+        auto              t =
+            launch_mock_server_invalid_header(ioContext, default_port, header);
+
+        auto  req = setup_request(pathSent);
+        Bytes bytesReceived;
+        setup_write_fcn(req, bytesReceived);
+
+        EXPECT_EQ(perform(req), -1) << header;
+        EXPECT_EQ(get_filelen(req), 0u) << header;
+        EXPECT_EQ(bytesReceived.size(), 0u) << header;
+        EXPECT_EQ(get_bytesreceived(req), 0u) << header;
+        EXPECT_EQ(get_status(req), GF_INVALID);
+        t.join();
+    }
+}
+
+TEST(Client, EarlyShutdown) {
+    struct Point {
+        Bytes  toSend;
+        size_t numToSend;
+    };
+
+    std::mt19937 gen{random_seed()};
+    Point const  points[] = {
+        {random_bytes(gen, 2), 1},
+    };
+
+    boost::asio::io_context ioContext{1};
+
+    for (size_t const chunkSize : {1024, 5, 3, 1}) {
+        for (auto const& point : points) {
+            std::string const pathSent{"/a/b/c/d/d"};
+            std::string       pathRequested;
+            auto              t = launch_mock_server(ioContext,
+                                        default_port,
+                                        point.toSend,
+                                        chunkSize,
+                                        pathRequested,
+                                        point.numToSend);
+
+            auto  req = setup_request(pathSent);
+            Bytes bytesReceived;
+            setup_write_fcn(req, bytesReceived);
+
+            EXPECT_EQ(perform(req), -1);
+            EXPECT_EQ(get_filelen(req), point.toSend.size());
+            EXPECT_EQ(get_bytesreceived(req), point.numToSend);
+            EXPECT_EQ(bytesReceived,
+                      Bytes(point.toSend.begin(),
+                            point.toSend.begin() + point.numToSend));
+            EXPECT_EQ(get_status(req), GF_OK);
             t.join();
         }
     }

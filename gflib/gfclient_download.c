@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
 
     // Parse and set command line arguments
     while ((option_char = getopt_long(
-                argc, argv, "l:r:hp:s:n:", gLongOptions, NULL)) != -1) {
+                argc, argv, "l:r:hp:s:n:w:", gLongOptions, NULL)) != -1) {
         switch (option_char) {
         case 'r':
         case 'n': // nrequests
