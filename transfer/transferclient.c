@@ -2,10 +2,17 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200112L
 #endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
 
 #include <sys/types.h>
 
 #include <stddef.h>
+
+/////////////////////////////////////////////////////////
+// TransferClient
+/////////////////////////////////////////////////////////
 
 typedef struct TransferClientTag TransferClient;
 
@@ -37,6 +44,11 @@ TransferClientStatus tc_receive(TransferClient*, TransferSink* sink);
 // destroy the provided client
 void tc_destroy(TransferClient*);
 
+/////////////////////////////////////////////////////////
+// TransferSink
+/////////////////////////////////////////////////////////
+
+// see TransferSink below
 typedef void* (*TransferSinkStartFcn)(void* sinkData);
 
 // see TransferSink below
@@ -57,26 +69,26 @@ typedef int (*TransferSinkFinishFcn)(void* sinkData, void* sessionData);
 struct TransferSinkTag {
     // session = sink->startFcn(sink->sinkData);
     // starts a data read session, the returned value may be used
-    // with sendFcn.  sink_start is a convience call to this function.
+    // with sendFcn.  sink_start is a convenience call to this function.
     TransferSinkStartFcn startFcn;
 
     // nWritten = sink->sendFcn(sink, session, buffer, nBytes)
     // sends nBytes pointed to by buffer to the sink for this session.
     // upon success nWritten == nBytes
     //
-    // sink_send is a convience call to this function
+    // sink_send is a convenience call to this function
     TransferSinkSendFcn sendFcn;
 
     // sink->cancelFcn(sink->sinkData, session)
     // cancels the current session leaving no side effects
     //
-    // sink_cancel is a convience call to this function
+    // sink_cancel is a convenience call to this function
     TransferSinkCancelFcn cancelFcn;
 
     // sink->finishFcn(sink->sinkData, session)
     // successfully finishes the session.
     //
-    // sink_finish is a convience call to this function
+    // sink_finish is a convenience call to this function
     TransferSinkFinishFcn finishFcn;
 
     // client data
@@ -104,13 +116,17 @@ void sink_cancel(TransferSink* sink, void*);
 // see finishFcn in TransferSink above
 int sink_finish(TransferSink* sink, void*);
 
+/////////////////////////////////////////////////////////
+// FileTransferSink
+/////////////////////////////////////////////////////////
+
 // a wrapper around TransferSink to for file writing
 typedef struct FileTransferSinkTag FileTransferSink;
 
 // create a FileTransferSink ready to write to fileName
-// each sink session will write to the provided file name
+// each sink session (call to start) will write to the provided file name.
 // if the sink is canceled, the file will be unlinked, even
-// if it existed before writing started
+// if it existed before writing started.
 FileTransferSink* fsink_create(char const* fileName);
 
 // get the underlying sink
@@ -227,6 +243,10 @@ EXIT_POINT:
 }
 #endif // TEST_MODE
 
+/////////////////////////////////////////////////////////
+// TransferClient
+/////////////////////////////////////////////////////////
+
 struct TransferClientTag {
     struct addrinfo* addrInfo;
 };
@@ -270,7 +290,9 @@ TransferClient* tc_create(TransferClientStatus* const status,
 }
 
 // search through address info for a socket that will accept our connection.
-// returns -1 on failure.  tc->addrInfo must be valid.
+// returns -1 on failure.  ec->addressInfo must be valid.
+// addressInfo contains several options, e.g., IPv4 vs IPv6 or aliases.  use the
+// first that succeeds.
 static int create_and_connect_to_socket_(TransferClient* const tc) {
     assert(tc->addrInfo);
     int socketFid = -1;
@@ -288,6 +310,9 @@ static int create_and_connect_to_socket_(TransferClient* const tc) {
     return -1;
 }
 
+// start a session with sink.  keep reading data from socketId and send to the
+// sink.  if a receive failure happens, cancel the sink session.  on success
+// finish the sink session.
 static TransferClientStatus receive_and_redirect_(TransferClient* const tc,
                                                   int const     socketId,
                                                   TransferSink* sink) {
@@ -322,6 +347,10 @@ void tc_destroy(TransferClient* tc) {
     freeaddrinfo(tc->addrInfo);
     free(tc);
 }
+
+/////////////////////////////////////////////////////////
+// TransferSink
+/////////////////////////////////////////////////////////
 
 void sink_initialize(TransferSink*         sink,
                      TransferSinkStartFcn  startFcn,
@@ -361,11 +390,18 @@ struct FileTransferSinkTag {
     char*        fileName;
 };
 
+/////////////////////////////////////////////////////////
+// FileTransferSink
+/////////////////////////////////////////////////////////
+
+// the start function for the file transfer sink.  Opens the file.  Use STDLIB
+// file API instead of system.
 static void* file_sink_start_(void* const sinkData) {
     FileTransferSink* const fsink = (FileTransferSink*)sinkData;
     return fopen(fsink->fileName, "w");
 }
 
+// basically fwrite
 static ssize_t file_sink_send_(void* const       sinkData,
                                void* const       sessionData,
                                void const* const buffer,
@@ -375,6 +411,7 @@ static ssize_t file_sink_send_(void* const       sinkData,
     return (ssize_t)fwrite(buffer, 1, nBytes, fh);
 }
 
+// close the file and then remove it.  ignore remove errors.
 static void file_sink_cancel_(void* const sinkData, void* const sessionData) {
     FileTransferSink* const fsink = (FileTransferSink*)sinkData;
     FILE* const             fh    = (FILE*)sessionData;
@@ -382,6 +419,7 @@ static void file_sink_cancel_(void* const sinkData, void* const sessionData) {
     remove(fsink->fileName);
 }
 
+// close the file
 static int file_sink_finish_(void* const sinkData, void* const sessionData) {
     (void)sinkData;
     FILE* const fh = (FILE*)sessionData;
@@ -392,8 +430,7 @@ static int file_sink_finish_(void* const sinkData, void* const sessionData) {
 FileTransferSink* fsink_create(char const* fileName) {
     FileTransferSink* out =
         (FileTransferSink*)calloc(1, sizeof(FileTransferSink));
-    out->fileName = (char*)malloc(strlen(fileName) + 1);
-    strcpy(out->fileName, fileName);
+    out->fileName = strdup(fileName);
     sink_initialize(&out->base,
                     file_sink_start_,
                     file_sink_send_,

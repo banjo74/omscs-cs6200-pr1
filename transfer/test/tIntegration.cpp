@@ -36,6 +36,7 @@ TEST(Integration, SingleThreaded) {
     TemporaryDirectory const td;
 
     auto [server, _] = create_server(default_port, 1);
+    assert(server);
     for (auto const& bytes : bytess) {
         auto const serverFile = temp_file(td.dir());
         spew(serverFile, bytes);

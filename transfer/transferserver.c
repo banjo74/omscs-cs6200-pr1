@@ -2,10 +2,17 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200112L
 #endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
 #include <sys/types.h>
 
 #include <stdbool.h>
 #include <stddef.h>
+
+/////////////////////////////////////////////////////////
+// TransferServer
+/////////////////////////////////////////////////////////
 
 typedef struct TransferServerTag TransferServer;
 typedef struct TransferSourceTag TransferSource;
@@ -42,9 +49,9 @@ typedef bool (*ContinueFcn)(void*);
 // function used with ts_run, below, to log error conditions
 typedef void (*LogFcn)(void*, TransferServerStatus);
 
-// Start running the server.  While the server is in listen mode after calling
-// ts_create, no connections will be accepted until ts_run is executed.  ts_run
-// will continue accepting connections from clients or until
+// Start running the server.  The server is in listen mode after calling
+// ts_create but no connections will be accepted until ts_run is executed.
+// ts_run will continue accepting connections from clients or until
 // continueFcn(continueFcnData) returns false.  If continueFcn is null,
 // continueFcnData is ignored and the server runs forever.
 //
@@ -67,6 +74,10 @@ void ts_destroy(TransferServer*);
 // given a status return a descriptive error message
 char const* ts_error_message(TransferServerStatus);
 
+/////////////////////////////////////////////////////////
+// TransferSource
+/////////////////////////////////////////////////////////
+
 // See TransferSource below.
 typedef void* (*TransferSourceStartFcn)(void* sourceData);
 
@@ -85,7 +96,7 @@ typedef int (*TransferSourceFinishFcn)(void* sourceData, void* sessionData);
 struct TransferSourceTag {
     // session = source->startFcn(source->sourceData);
     // starts a data read session, the returned value may be used
-    // with readFcn.  source_start is a convience call to this function.
+    // with readFcn.  source_start is a convenience call to this function.
     TransferSourceStartFcn startFcn;
 
     // nRead = source->readFcn(source->sourceData, session, buffer, maxToRead);
@@ -98,14 +109,14 @@ struct TransferSourceTag {
     //
     // returns negative value on failure
     //
-    // source_read is a convience call to this function.
+    // source_read is a convenience call to this function.
     TransferSourceReadFcn readFcn;
 
     // source->finishFcn(source->sourceData, session)
     // terminates the session.  releases any resources used by the
     // session and invalidates session
     //
-    // source_finish is a convience call to this function.
+    // source_finish is a convenience call to this function.
     TransferSourceFinishFcn finishFcn;
 
     // client data.
@@ -130,6 +141,10 @@ int source_finish(TransferSource* source, void*);
 
 // a wrapper around TransferSource to for file reading
 typedef struct FileTransferSourceTag FileTransferSource;
+
+/////////////////////////////////////////////////////////
+// FileTransferSource
+/////////////////////////////////////////////////////////
 
 // create a FileTransferSource that reads fileName with each session
 // will succeed even if fileName doesn't exist but start on the underlying
@@ -235,6 +250,10 @@ EXIT_POINT:
 }
 #endif
 
+/////////////////////////////////////////////////////////
+// TransferServer
+/////////////////////////////////////////////////////////
+
 struct TransferServerTag {
     int              socketId;
     unsigned short   portNumber;
@@ -247,8 +266,9 @@ struct TransferServerTag {
 };
 
 // Wrapper around getaddrinfo.  Resolve addrinfo struct for serverName and port
-// using getaddrinfo mainly to support IPv4 and IPv6 plush other functions are
-// deprecated.
+// using getaddrinfo mainly to support IPv4 and IPv6 plus the other POSIX
+// address resolution functions are deprecated.  Note, if hostName is NULL,
+// resolves the localhost.
 static struct addrinfo* resolve_address_info_(char const*          hostName,
                                               unsigned short const port) {
     char portNumStr[16];
@@ -267,6 +287,7 @@ static struct addrinfo* resolve_address_info_(char const*          hostName,
     return newAddressInfo;
 }
 
+// avoid socket already in use errors when binding by marking socket reusable.
 static void set_socket_reusable_(int const socketFd) {
     int const optionValue = 1;
     setsockopt(
@@ -274,7 +295,9 @@ static void set_socket_reusable_(int const socketFd) {
 }
 
 // search through address info for a socket that will accept our connection.
-// returns -1 on failure.  tc->addressInfo must be valid.
+// sets *usedAddrOut to the first address to which we can successfully bind and
+// returns the socketId.  If no address can be bound to, return -1 and
+// *usedAddrOut is unmodified.
 static int create_and_bind_to_socket_(struct addrinfo*        ai,
                                       struct addrinfo** const usedAddr) {
     assert(ai);
@@ -295,6 +318,7 @@ static int create_and_bind_to_socket_(struct addrinfo*        ai,
     return -1;
 }
 
+// helper to make a timeval given a total number of microseconds
 static struct timeval make_timeval_(suseconds_t usec) {
     struct timeval tv;
     memset(&tv, 0, sizeof(tv));
@@ -329,6 +353,7 @@ TransferServer* ts_create(TransferServerStatus* const status,
         goto EXIT_POINT;
     }
 
+    // we'll use these for select, below
     FD_SET(ts->socketId, &ts->listenSet);
     ts->timeout = make_timeval_(1000);
 
@@ -398,7 +423,7 @@ static void shutdown_(int const socketId) {
 
 static TransferServerStatus handle_connection_(TransferServer* const ts,
                                                TransferSource*       source,
-                                               int const             socketId) {
+                                               int const acceptedSocket) {
     TransferServerStatus status        = TransferServerSuccess;
     void*                sourceSession = source_start(source);
     if (!sourceSession) {
@@ -410,7 +435,7 @@ static TransferServerStatus handle_connection_(TransferServer* const ts,
     uint8_t buffer[BUFSIZE];
     while ((numRead = source_read(
                 source, sourceSession, buffer, sizeof(buffer))) > 0) {
-        int const sendResult = send_all_(socketId, buffer, numRead);
+        int const sendResult = send_all_(acceptedSocket, buffer, numRead);
         if (sendResult == -1) {
             status = TransferServerFailedToSend;
             goto EXIT_POINT;
@@ -498,6 +523,10 @@ char const* ts_error_message(TransferServerStatus const status) {
     return "";
 }
 
+/////////////////////////////////////////////////////////
+// TransferSource
+/////////////////////////////////////////////////////////
+
 void source_initialize(TransferSource*         source,
                        TransferSourceStartFcn  startFcn,
                        TransferSourceReadFcn   readFcn,
@@ -524,6 +553,10 @@ ssize_t source_read(TransferSource* const source,
 int source_finish(TransferSource* source, void* session) {
     return source->finishFcn(source->sourceData, session);
 }
+
+/////////////////////////////////////////////////////////
+// FileTransferSource
+/////////////////////////////////////////////////////////
 
 struct FileTransferSourceTag {
     TransferSource base;
@@ -555,8 +588,7 @@ static int file_source_finish_(void* const sourceData,
 FileTransferSource* fsource_create(char const* fileName) {
     FileTransferSource* out =
         (FileTransferSource*)calloc(1, sizeof(FileTransferSource));
-    out->fileName = (char*)malloc(strlen(fileName) + 1);
-    strcpy(out->fileName, fileName);
+    out->fileName = strdup(fileName);
     source_initialize(&out->base,
                       file_source_start_,
                       file_source_read_,
