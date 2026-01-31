@@ -1,7 +1,7 @@
 #ifndef generator_write_table_hpp
 #define generator_write_table_hpp
 
-#include "Graph.hpp"
+#include "CompressedGraph.hpp"
 
 namespace generator {
 enum class FieldNames {
@@ -20,10 +20,15 @@ struct WriteTableConfig {
     std::string tableType         = "Action";
     std::string tableVariableName = "table";
 
+    std::string classMapType = "uint8_t";
+    std::string classMapName = "class_";
+
     bool makeStatic = true;
 };
 
-void write_table(std::ostream& stream, WriteTableConfig const&, Graph const&);
+void write_table(std::ostream& stream,
+                 WriteTableConfig const&,
+                 CompressedGraph const&);
 } // namespace generator
 
 #endif // include guard

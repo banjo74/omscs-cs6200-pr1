@@ -1,4 +1,6 @@
 #include "Graph.hpp"
+#include "build_graph.hpp"
+#include "compress_graph.hpp"
 #include "write_table.hpp"
 
 #include <filesystem>
@@ -18,14 +20,15 @@ int main(int argc, char** argv) try {
     }
     std::filesystem::path const outputFile{argv[1]};
 
-    auto const graph = build_graph({{"GETFILE", {"GetfileToken"}},
+    auto const graph =
+        compress_graph(build_graph({{"GETFILE", {"GetfileToken"}},
                                     {"GET", {"GetToken"}},
                                     {"OK", {"OkToken"}},
                                     {"FILE_NOT_FOUND", {"FileNotFoundToken"}},
                                     {"ERROR", {"ErrorToken"}},
                                     {"INVALID", {"InvalidToken"}}},
                                    {'/'},
-                                   "\r\n\r\n");
+                                   "\r\n\r\n"));
 
     std::ofstream stream{outputFile};
     if (!stream) {
@@ -40,7 +43,9 @@ int main(int argc, char** argv) try {
                  .numberId          = "SizeToken",
                  .noTokenId         = "UnknownToken",
                  .tableType         = "struct Action const",
-                 .tableVariableName = "action_table_"},
+                 .tableVariableName = "action_table_",
+                 .classMapType      = "const uint8_t",
+                 .classMapName      = "character_class_"},
                 graph);
 
     stream.close();

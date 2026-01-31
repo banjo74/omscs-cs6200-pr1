@@ -13,13 +13,13 @@ bool is_word_character(char);
 /// just a wrapper around std::isdigit but returns a bool instead of an int
 bool is_digit(char);
 
-inline auto all_characters() {
-    return std::views::iota(
-               static_cast<int>(std::numeric_limits<char>::min()),
-               static_cast<int>(std::numeric_limits<char>::max()) + 1) |
-           std::views::transform(
-               [](auto const x) { return static_cast<char>(x); });
+inline constexpr auto all_characters() {
+    return std::views::iota(0, 128) | std::views::transform([](auto const x) {
+               return static_cast<char>(x);
+           });
 }
+
+constexpr size_t num_characters = std::ranges::size(all_characters());
 
 inline auto word_characters() {
     return all_characters() | std::views::filter(is_word_character);

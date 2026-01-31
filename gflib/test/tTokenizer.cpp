@@ -1,6 +1,7 @@
 #include "../gf-student.h"
 #include "TokenizerPtr.hpp"
 #include "random_seed.hpp"
+#include "terminator.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -10,6 +11,33 @@
 using namespace gf::test;
 
 namespace {
+inline std::string to_readable(char c) {
+    static std::unordered_map<char, std::string> const m{
+        {'\n', "\\n"},
+        {'\t', "\\t"},
+        {'\r', "\\r"},
+        {127, "DEL"},
+    };
+    if (auto const iter = m.find(c); iter != m.end()) {
+        return iter->second;
+    }
+    if (std::isprint(c) != 0) {
+        return {c};
+    }
+    char buffer[12];
+    std::snprintf(
+        buffer, sizeof(buffer), "0x%.2x", static_cast<unsigned int>(c));
+    return buffer;
+}
+
+inline std::string to_readable(std::string const& in) {
+    std::string out;
+    for (auto const c : in) {
+        out += to_readable(c);
+    }
+    return out;
+}
+
 class CppToken {
   public:
     using Data = std::variant<TokenId, std::string, size_t>;
@@ -87,46 +115,45 @@ std::ostream& operator<<(std::ostream& stream, CppToken const& tok) {
     return stream;
 }
 
-std::string input_text(CppToken const& tok) {
+Token to_token(CppToken const& tok) {
     struct Visitor {
-        std::string operator()(TokenId id) const {
-            std::string const s = tok_str(id);
-            std::string       out;
-            for (auto const c : s) {
-                auto const u = std::toupper(c);
-                if (u == c && !out.empty()) {
-                    out += '_';
-                }
-                out += u;
-            }
+        Token operator()(TokenId id) const {
+            Token out;
+            out.id = id;
             return out;
         }
 
-        std::string operator()(size_t s) const {
-            return std::to_string(s);
+        Token operator()(size_t s) const {
+            Token out;
+            out.id        = SizeToken;
+            out.data.size = s;
+            return out;
         }
 
-        std::string operator()(std::string const& s) const {
-            return s;
+        Token operator()(std::string const& s) const {
+            Token out;
+            out.id        = PathToken;
+            out.data.path = s.c_str();
+            return out;
         }
     };
 
     return std::visit(Visitor{}, tok.data());
 }
 
-std::string const term{"\r\n\r\n"};
 std::string const ignored{"123456"};
 
-template <std::ranges::range R>
-std::string input_text(R&& r) {
-    std::string out;
-    for (auto const& c : r) {
-        if (!out.empty()) {
-            out += " ";
-        }
-        out += input_text(c);
+std::string input_text(std::vector<CppToken> const& r) {
+    std::vector<Token> tokens;
+    tokens.reserve(r.size());
+    for (auto const& t : r) {
+        tokens.emplace_back(to_token(t));
     }
-    out += term;
+    size_t const needed =
+        snprintf_tokens(NULL, 0, tokens.data(), tokens.size());
+
+    std::string out(needed, ' ');
+    snprintf_tokens(out.data(), out.size() + 1, tokens.data(), tokens.size());
     return out;
 }
 
@@ -165,6 +192,15 @@ void test_point(TokenizerPtr& tok, Point const& point) {
     }
     EXPECT_EQ(tok_done(tok.get()), point.success) << point.input;
     EXPECT_EQ(point.expected, get_tokens(tok)) << point.input;
+
+    {
+        std::string const roundTrip = input_text(get_tokens(tok));
+        tok_reset(tok.get());
+        EXPECT_EQ(static_cast<ssize_t>(roundTrip.size()),
+                  process(tok, roundTrip.data(), roundTrip.size()));
+        EXPECT_EQ(point.expected, get_tokens(tok))
+            << point.input << ":round trip";
+    }
 }
 
 template <typename Points>
@@ -173,29 +209,64 @@ void test_points(TokenizerPtr& tok, Points&& points) {
                           [&tok](auto const& p) { test_point(tok, p); });
 }
 
+class RandomToken {
+  public:
+    RandomToken()
+        : validChars_{"abcdefghijklmnopqrstuvwxyz0123456789/_()"}
+        , idDist_{0, NumTokens - 1}
+        , charDist_{0, validChars_.size() - 1}
+        , strSizeDist_{3, 204} {}
+
+    template <typename Gen>
+    CppToken operator()(Gen& gen) {
+        auto const id = static_cast<TokenId>(idDist_(gen));
+        switch (id) {
+        case SizeToken:
+            return CppToken{sizeDist_(gen)};
+        case PathToken:
+            return CppToken{randomString(gen)};
+        default:
+            return CppToken{id};
+        }
+    }
+
+  private:
+    std::string                           validChars_;
+    std::uniform_int_distribution<int>    idDist_;
+    std::uniform_int_distribution<size_t> sizeDist_;
+    std::uniform_int_distribution<size_t> charDist_;
+    std::uniform_int_distribution<size_t> strSizeDist_;
+
+    template <typename Gen>
+    std::string randomString(Gen& gen) {
+        std::string  out{'/'};
+        size_t const n = strSizeDist_(gen);
+        for (size_t i = 0; i < n; ++i) {
+            out += validChars_[charDist_(gen)];
+        }
+        return out;
+    }
+};
+
 } // namespace
 
 TEST(Tokenizer, Basic) {
     auto tok = create_tokenizer();
 
-    std::vector<CppToken> const baseTokens{
-        SIMPLE_TOKEN_ID(DECL_TOKEN_ID) "/a/b/c/d/e/f/g",
-        12,
-        "/h/i/j/()/k/l/g123456",
-        54321};
-
-    std::vector<CppToken>                 bigInput;
-    std::mt19937                          gen{gf::test::random_seed()};
-    std::uniform_int_distribution<size_t> picker(0, baseTokens.size() - 1);
-    for (size_t i = 0; i < 1024; ++i) {
-        bigInput.push_back(baseTokens[picker(gen)]);
+    std::vector<CppToken> bigInput;
+    std::mt19937          gen{gf::test::random_seed()};
+    RandomToken           randomToken;
+    while (bigInput.size() < 1024) {
+        bigInput.push_back(randomToken(gen));
     }
 
     Point const points[] = {
-        {"GETFILE GET /a/path/to/a/file" + term,
+        {"GETFILE GET /a/path/to/a/file" + terminator,
          true,
          {GetfileToken, GetToken, "/a/path/to/a/file"}},
-        {"GETFILE OK 1234567" + term, true, {GetfileToken, OkToken, 1234567}},
+        {"GETFILE OK 1234567" + terminator,
+         true,
+         {GetfileToken, OkToken, 1234567}},
         {input_text(bigInput), true, bigInput},
         {"GETFILE OK 1234567 a/b/c", false, {GetfileToken, OkToken, 1234567}},
         {"GETFILE Ok 1234567", false, {GetfileToken}},

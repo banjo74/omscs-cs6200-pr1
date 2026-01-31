@@ -5,6 +5,7 @@
 #include "TokenizerPtr.hpp"
 #include "random_bytes.hpp"
 #include "random_seed.hpp"
+#include "terminator.hpp"
 
 #include <boost/asio/ts/buffer.hpp>
 #include <boost/asio/ts/internet.hpp>
@@ -22,7 +23,6 @@ using namespace gf::test;
 
 namespace {
 unsigned short const default_port = 14757;
-std::string const    term{"\r\n\r\n"};
 } // namespace
 
 TEST(Client, CreateAndDestroy) {
@@ -98,7 +98,7 @@ std::thread launch_mock_server(
         pathRequested = request.path;
 
         std::string const header =
-            "GETFILE OK " + std::to_string(toSend.size()) + term;
+            "GETFILE OK " + std::to_string(toSend.size()) + terminator;
         Bytes bytes(header.size());
         memcpy(bytes.data(), header.data(), header.size());
         bytes.insert(bytes.end(),
@@ -173,7 +173,7 @@ std::thread launch_mock_server_with_bad_status(
         tcp::socket socket{ioContext};
         acceptor->accept(socket);
 
-        std::string const header = "GETFILE " + to_string(status) + term;
+        std::string const header = "GETFILE " + to_string(status) + terminator;
         Bytes             bytes(header.size());
         memcpy(bytes.data(), header.data(), header.size());
         for (size_t sent = 0; sent < bytes.size(); sent += chunkSize) {
@@ -240,13 +240,14 @@ std::thread launch_mock_server_invalid_header(
 
 TEST(Client, InvalidHeader) {
     boost::asio::io_context ioContext{1};
-    std::string const       badHeaders[] = {"GET",
-                                            "   ",
-                                            "",
-                                            "GETFILE OK" + term,
-                                            "GETFILE GET" + term,
-                                            "GETFILE OK /a/b/a/b" + term,
-                                            "GETFILE OK 123456" + term.substr(0, 3)};
+    std::string const       badHeaders[] = {
+        "GET",
+        "   ",
+        "",
+        "GETFILE OK" + terminator,
+        "GETFILE GET" + terminator,
+        "GETFILE OK /a/b/a/b" + terminator,
+        "GETFILE OK 123456" + terminator.substr(0, 3)};
     for (auto const& header : badHeaders) {
         std::string const pathSent{"/a/b/c/d/d"};
         auto              t =

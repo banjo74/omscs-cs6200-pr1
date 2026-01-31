@@ -1,14 +1,11 @@
 #include "../gf-student.h"
 #include "TokenizerPtr.hpp"
+#include "terminator.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using namespace gf::test;
-
-namespace {
-std::string const term{"\r\n\r\n"};
-}
 
 TEST(RequestGet, RoundTrip) {
     RequestGet const requests[] = {
@@ -21,7 +18,7 @@ TEST(RequestGet, RoundTrip) {
         auto const n = snprintf_request_get(buffer, sizeof(buffer), &request);
         EXPECT_THAT(buffer,
                     testing::MatchesRegex(std::string{"GETFILE\\s+GET\\s+"} +
-                                          request.path + term))
+                                          request.path + terminator))
             << request.path;
 
         tok_reset(tok.get());
@@ -35,12 +32,12 @@ TEST(RequestGet, RoundTrip) {
 TEST(RequestGet, InvalidUnpack) {
     std::string const invalidRequests[] = {
         "not recognized",
-        "GETFILE GET /a/b/c/d",            // no terminator
-        "GETFILE GET" + term,              // too few
-        "OK GET /a/b/c/d" + term,          // not GETFILE
-        "GETFILE OK /a/b/c/d" + term,      // not GET
-        "GETFILE GET 123456" + term,       // not a path
-        "GETFILE GET GET /a/b/c/d" + term, // too many
+        "GETFILE GET /a/b/c/d",                 // no terminator
+        "GETFILE GET" + terminator,              // too few
+        "OK GET /a/b/c/d" + terminator,          // not GETFILE
+        "GETFILE OK /a/b/c/d" + terminator,      // not GET
+        "GETFILE GET 123456" + terminator,       // not a path
+        "GETFILE GET GET /a/b/c/d" + terminator, // too many
     };
     auto tok = create_tokenizer();
     for (auto const& s : invalidRequests) {
@@ -67,7 +64,7 @@ TEST(Response, RoundTrip) {
             buffer,
             testing::MatchesRegex(std::string{"GETFILE\\s+((OK\\s+[0-9]+)|"
                                               "ERROR|FILE_NOT_FOUND|INVALID)"} +
-                                  term));
+                                  terminator));
 
         tok_reset(tok.get());
         process(tok, buffer, static_cast<size_t>(n));
@@ -81,17 +78,17 @@ TEST(Response, RoundTrip) {
 TEST(Response, InvalidUnpack) {
     std::string const invalidResponses[] = {
         "not recognized",
-        "GETFILE OK 123456",             // no terminator
-        "GETFILE INVALID",               // no terminator
-        "GETFILE" + term,                // too few
-        "GET OK 123456" + term,          // invalid first
-        "GET INVALID" + term,            // invalid first
-        "GETFILE GET" + term,            // invalid second
-        "GETFILE GET 123456" + term,     // invalid second
-        "GETFILE GET" + term,            // invalid second
-        "GETFILE INVALID 123456" + term, // size not expected
-        "GETFILE OK /a/b/c/d" + term,    // size expected
-        "GETFILE OK OK 123456" + term,   // too many
+        "GETFILE OK 123456",                  // no terminator
+        "GETFILE INVALID",                    // no terminator
+        "GETFILE" + terminator,                // too few
+        "GET OK 123456" + terminator,          // invalid first
+        "GET INVALID" + terminator,            // invalid first
+        "GETFILE GET" + terminator,            // invalid second
+        "GETFILE GET 123456" + terminator,     // invalid second
+        "GETFILE GET" + terminator,            // invalid second
+        "GETFILE INVALID 123456" + terminator, // size not expected
+        "GETFILE OK /a/b/c/d" + terminator,    // size expected
+        "GETFILE OK OK 123456" + terminator,   // too many
     };
     auto tok = create_tokenizer();
     for (auto const& s : invalidResponses) {

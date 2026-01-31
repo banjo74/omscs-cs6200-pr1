@@ -42,30 +42,26 @@ extern "C" {
 typedef struct TokenizerTag Tokenizer;
 
 /*!
- Tokens recognized by the tokenizer.  Those in SIMPLE_TOKEN_ID correspond to
- keywords, GETFILE, GET, etc.
-
- Those in COMPOUND_TOKEN_ID have corresponding data.  See the Token structure
- below.
+ Tokens recognized by the tokenizer.  Each element is a 2-tuple.  The first is
+ used to construct the token enumerator (by appending Token).  The second is the
+ keyword.
  */
 
-#define SIMPLE_TOKEN_ID(_X) \
-    _X(Getfile)             \
-    _X(Get)                 \
-    _X(Ok)                  \
-    _X(FileNotFound)        \
-    _X(Error)               \
-    _X(Invalid)
+#define TOKEN_ID(_X)                   \
+    _X(Getfile, "GETFILE")             \
+    _X(Get, "GET")                     \
+    _X(Ok, "OK")                       \
+    _X(FileNotFound, "FILE_NOT_FOUND") \
+    _X(Error, "ERROR")                 \
+    _X(Invalid, "INVALID")             \
+    _X(Size, "")                       \
+    _X(Path, "")
 
-#define COMPOUND_TOKEN_ID(_X) \
-    _X(Size)                  \
-    _X(Path)
+#define DECL_TOKEN_ID(_ID, _TEXT) _ID##Token,
 
-#define TOKEN_ID(_X) SIMPLE_TOKEN_ID(_X) COMPOUND_TOKEN_ID(_X)
+typedef enum { UnknownToken = -1, TOKEN_ID(DECL_TOKEN_ID) NumTokens } TokenId;
 
-#define DECL_TOKEN_ID(_ID) _ID##Token,
-
-typedef enum { UnknownToken = -1, TOKEN_ID(DECL_TOKEN_ID) } TokenId;
+#undef DECL_TOKEN_ID
 
 typedef struct TokenTag Token;
 
@@ -137,6 +133,13 @@ char const* tok_str(TokenId);
 
 // the string of characters that represents the end of a header
 char const* tok_terminator();
+
+// given a sequence of tokens, print the tokens to the provided buffer
+// output works like that of snprintf.
+int snprintf_tokens(char*        buffer,
+                    size_t       bufferSize,
+                    Token const* tokens,
+                    size_t       numTokens);
 
 /////////////////////////////////////////////////////////
 // Headers

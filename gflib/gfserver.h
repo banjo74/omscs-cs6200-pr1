@@ -3,6 +3,10 @@
 
 #include <unistd.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * gfserver is a server library for transferring files using the GETFILE
  * protocol.
@@ -10,14 +14,14 @@
 
 typedef int gfstatus_t;
 
-#define  GF_OK 200
-#define  GF_FILE_NOT_FOUND 400
-#define  GF_ERROR 500
-#define  GF_INVALID 600
+#define GF_OK             200
+#define GF_FILE_NOT_FOUND 400
+#define GF_ERROR          500
+#define GF_INVALID        600
 
-typedef size_t gfh_error_t;
+typedef size_t             gfh_error_t;
 typedef struct gfcontext_t gfcontext_t;
-typedef struct gfserver_t gfserver_t;
+typedef struct gfserver_t  gfserver_t;
 
 /*
  * This function must be the first one called as part of
@@ -26,17 +30,17 @@ typedef struct gfserver_t gfserver_t;
  * is not needed for the gfs_* call which are intended to be called from
  * the handler callback.
  */
-gfserver_t *gfserver_create();
+gfserver_t* gfserver_create();
 
 /*
  * Sets the port at which the server will listen for connections.
  */
-void gfserver_set_port(gfserver_t **gfs, unsigned short port);
+void gfserver_set_port(gfserver_t** gfs, unsigned short port);
 
 /*
  * Starts the server.  Does not return.
  */
-void gfserver_serve(gfserver_t **gfs);
+void gfserver_serve(gfserver_t** gfs);
 
 /*
  * Sets the handler callback, a function that will be called for each each
@@ -46,25 +50,28 @@ void gfserver_serve(gfserver_t **gfs);
  * - the requested path
  * - the pointer specified in the gfserver_set_handlerarg option.
  */
-void gfserver_set_handler(gfserver_t **gfs, gfh_error_t (*handler)(gfcontext_t **, const char *, void*));
+void gfserver_set_handler(gfserver_t** gfs,
+                          gfh_error_t (*handler)(gfcontext_t**,
+                                                 char const*,
+                                                 void*));
 
 /*
  * Sets the maximum number of pending connections which the server
  * will tolerate before rejecting connection requests.
  */
-void gfserver_set_maxpending(gfserver_t **gfs, int max_npending);
+void gfserver_set_maxpending(gfserver_t** gfs, int max_npending);
 
 /*
  * Sets the third argument for calls to the handler callback.
  */
-void gfserver_set_handlerarg(gfserver_t **gfs, void* arg);
+void gfserver_set_handlerarg(gfserver_t** gfs, void* arg);
 
 /*
  * Sends to the client the Getfile header containing the appropriate
  * status and file length for the given inputs.  This function should
  * only be called from within a callback registered gfserver_set_handler.
  */
-ssize_t gfs_sendheader(gfcontext_t **ctx, gfstatus_t status, size_t file_len);
+ssize_t gfs_sendheader(gfcontext_t** ctx, gfstatus_t status, size_t file_len);
 
 /*
  * Sends size bytes starting at the pointer data to the client
@@ -72,17 +79,20 @@ ssize_t gfs_sendheader(gfcontext_t **ctx, gfstatus_t status, size_t file_len);
  * with gfserver_set_handler.  It returns once the data has been
  * sent.
  */
-ssize_t gfs_send(gfcontext_t **ctx, const void *data, size_t size);
+ssize_t gfs_send(gfcontext_t** ctx, void const* data, size_t size);
 
 /*
  * this routine is used to handle the getfile request
  */
-gfh_error_t gfs_handler(gfcontext_t **ctx, const char *path, void* arg);
+gfh_error_t gfs_handler(gfcontext_t** ctx, char const* path, void* arg);
 
 /*
  * Aborts the connection to the client associated with the input
  * gfcontext_t.
  */
-void gfs_abort(gfcontext_t **ctx);
+void gfs_abort(gfcontext_t** ctx);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

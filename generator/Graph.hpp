@@ -1,9 +1,9 @@
 #ifndef generator_Graph_hpp
 #define generator_Graph_hpp
 
+#include <boost/hash2/hash_append.hpp>
+
 #include <optional>
-#include <set>
-#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -29,59 +29,30 @@ struct Number {
     bool operator==(Number const&) const = default;
 };
 
-using Token = std::variant<GenericWord, Number, WordInfo>;
+// one of the recognized tokens.  Note, Number and GenericWord are just tags.
+using TokenBase = std::variant<GenericWord, Number, WordInfo>;
 
+struct Token : TokenBase {
+    using TokenBase::TokenBase;
+};
+
+// Action represents the action to take for each state X character combination
 struct Action {
-    size_t               toState;
-    bool                 resetRecording;
+    // the state to transition to
+    size_t toState;
+    // for tokens that have variable content, reset recording content (the start
+    // of one of these tokens)
+    bool resetRecording;
+    // if set, at the end of a token.
     std::optional<Token> token;
 };
 
+// a (di)graph.  Each node is represented by an element in the vector and
+// represents a state of the FSM we're building.  Each node contains it's
+// outbound edges as Action where Action::toState says which state the edge goes
+// to.
 using Graph = std::vector<std::unordered_map<char, Action>>;
 
-enum BaseStates : size_t {
-    Start,
-    Invalid,
-    Finished,
-    InSpace,
-    InDigits,
-    InGenericWord,
-    NumBaseStates,
-};
-
-/// Construct a graph based on the provided words, generic word starters, and
-/// termination sequence.
-///
-/// Requirements:
-/// Each element in the domain of words (the word text) must be non-empty and
-/// consist of word characters, and may not start with a digit.
-///
-/// Each element of startsGenericWord must be a word character, my not be a
-/// digit, and may not start any of the word text.
-///
-/// Teminator must be non-empty and may not contain word characters or the
-/// space (32).
-Graph build_graph(Words const&          words,
-                  std::set<char> const& startsGenericWord,
-                  std::string const&    terminator);
-
-std::string state_string(size_t s);
-
-struct BuildGraphInvalidArgument : std::invalid_argument {
-    using std::invalid_argument::invalid_argument;
-};
-
-struct InvalidWord : BuildGraphInvalidArgument {
-    InvalidWord(std::string);
-};
-
-struct InvalidStartsGenericWordCharacter : BuildGraphInvalidArgument {
-    InvalidStartsGenericWordCharacter(char);
-};
-
-struct InvalidTerminator : BuildGraphInvalidArgument {
-    InvalidTerminator(std::string);
-};
 } // namespace generator
 
 #endif // include guard

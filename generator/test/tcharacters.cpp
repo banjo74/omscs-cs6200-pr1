@@ -17,7 +17,7 @@ auto to_set(R&& r) {
 } // namespace
 
 TEST(charcters, all_characters) {
-    EXPECT_EQ(to_set(all_characters()).size(), 256u);
+    EXPECT_EQ(to_set(all_characters()).size(), 128u);
 }
 
 TEST(characters, is_word_character) {

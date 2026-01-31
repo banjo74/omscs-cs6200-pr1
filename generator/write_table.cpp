@@ -1,6 +1,8 @@
 
 #include "write_table.hpp"
 
+#include "BaseStates.hpp"
+
 #include <functional>
 #include <iostream>
 
@@ -74,25 +76,40 @@ void write_fields(std::ostream& stream,
 
 } // namespace
 
-void write_table(std::ostream& stream, Config const& config, Graph const& g) {
+void write_table(std::ostream&          stream,
+                 Config const&          config,
+                 CompressedGraph const& g) {
     Action const invalid{.toState = Invalid};
 
     if (config.makeStatic) {
         stream << "static ";
     }
+    stream << config.classMapType << " " << config.classMapName << "["
+           << g.class_.size() << "] = {";
+    bool first = false;
+    for (auto const& c : all_characters()) {
+        if (first) {
+            stream << ", ";
+        }
+        first = true;
+        stream << static_cast<int>(g.class_[c]);
+    }
+    stream << "};" << std::endl;
+    if (config.makeStatic) {
+        stream << "static ";
+    }
     stream << config.tableType << " " << config.tableVariableName << "["
-           << g.size() << "][128] = {" << std::endl;
+           << g.graph.size() << "][" << g.numClasses() << "] = {" << std::endl;
 
-    bool firstState = false;
-    for (auto const& state : g) {
-        if (firstState) {
+    first = false;
+    for (auto const& state : g.graph) {
+        if (first) {
             stream << "," << std::endl;
         }
-        firstState = true;
+        first = true;
         stream << '{';
         bool firstAction = false;
-        for (size_t i = 0; i < 128; ++i) {
-            char const c = static_cast<char>(i);
+        for (uint8_t c = 0; c < g.numClasses(); ++c) {
             if (firstAction) {
                 stream << "," << std::endl;
             }
