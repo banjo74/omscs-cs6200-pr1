@@ -1,3 +1,4 @@
+#include "gf-student.h"
 #include "gfclient-student.h"
 
 #include <sys/stat.h>
@@ -44,40 +45,6 @@ static void localPath(char* req_path, char* local_path) {
     sprintf(local_path, "%s-%06d", &req_path[1], counter++);
 }
 
-static FILE* openFile(char* path) {
-    char *cur, *prev;
-    FILE* ans;
-
-    /* Make the directory if it isn't there */
-    prev = path;
-    while (NULL != (cur = strchr(prev + 1, '/'))) {
-        *cur = '\0';
-
-        if (0 > mkdir(&path[0], S_IRWXU)) {
-            if (errno != EEXIST) {
-                perror("Unable to create directory");
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        *cur = '/';
-        prev = cur;
-    }
-
-    if (NULL == (ans = fopen(&path[0], "w"))) {
-        perror("Unable to open file");
-        exit(EXIT_FAILURE);
-    }
-
-    return ans;
-}
-
-/* Callbacks ========================================================= */
-static void writecb(void* data, size_t data_len, void* arg) {
-    FILE* file = (FILE*)arg;
-    fwrite(data, 1, data_len, file);
-}
-
 /* Main ========================================================= */
 int main(int argc, char** argv) {
     /* COMMAND LINE OPTIONS ============================================= */
@@ -87,13 +54,9 @@ int main(int argc, char** argv) {
     unsigned short port          = 56726;
     char*          req_path      = NULL;
 
-    int  returncode = 0;
-    int  nthreads   = 8;
+    int  nthreads = 8;
     char local_path[PATH_BUFFER_SIZE];
     int  nrequests = 14;
-
-    gfcrequest_t* gfr  = NULL;
-    FILE*         file = NULL;
 
     setbuf(stdout, NULL); // disable caching
 
@@ -144,10 +107,10 @@ int main(int argc, char** argv) {
 
     // add your threadpool creation here
 
-    /* Build your queue of requests here */
+    Sink sink;
+    fsink_init(&sink);
+    MultiThreadedClient* mtc = mtc_start(server, port, nthreads, &sink);
     for (int i = 0; i < nrequests; i++) {
-        /* Note that when you have a worker thread pool, you will need to move
-         * this logic into the worker threads */
         req_path = workload_get_path();
 
         if (strlen(req_path) > PATH_BUFFER_SIZE) {
@@ -158,49 +121,10 @@ int main(int argc, char** argv) {
         }
 
         localPath(req_path, local_path);
-
-        file = openFile(local_path);
-
-        gfr = gfc_create();
-        gfc_set_path(&gfr, req_path);
-
-        gfc_set_port(&gfr, port);
-        gfc_set_server(&gfr, server);
-        gfc_set_writearg(&gfr, file);
-        gfc_set_writefunc(&gfr, writecb);
-
-        fprintf(stdout, "Requesting %s%s\n", server, req_path);
-
-        if (0 > (returncode = gfc_perform(&gfr))) {
-            fprintf(stdout, "gfc_perform returned an error %d\n", returncode);
-            fclose(file);
-            if (0 > unlink(local_path)) {
-                fprintf(stderr, "warning: unlink failed on %s\n", local_path);
-            }
-        } else {
-            fclose(file);
-        }
-
-        if (gfc_get_status(&gfr) != GF_OK) {
-            if (0 > unlink(local_path)) {
-                fprintf(stderr, "warning: unlink failed on %s\n", local_path);
-            }
-        }
-
-        fprintf(stdout, "Status: %s\n", gfc_strstatus(gfc_get_status(&gfr)));
-        fprintf(stdout,
-                "Received %zu of %zu bytes\n",
-                gfc_get_bytesreceived(&gfr),
-                gfc_get_filelen(&gfr));
-
-        gfc_cleanup(&gfr);
-
-        /*
-         * note that when you move the above logic into your worker thread, you
-         * will need to coordinate with the boss thread here to effect a clean
-         * shutdown.
-         */
+        mtc_process(mtc, req_path, local_path);
     }
+
+    mtc_finish(mtc);
 
     gfc_global_cleanup(); /* use for any global cleanup for AFTER your thread
                            pool has terminated. */

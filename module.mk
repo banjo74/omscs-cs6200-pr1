@@ -39,7 +39,12 @@ TESTEXE      := $(TESTBINDIR)/test
 TESTTS       := $(TESTTSDIR)/$(MODNAME).unit.ts
 SYSTEMTESTTS := $(TESTTSDIR)/$(MODNAME).system.ts
 
-EMBEDDEDOBJS := $(call ALLFILESWITHEXTENSION,o)
+EMBEDEDOBJS := $(call ALLFILESWITHEXTENSION,o)
+# if an embedded obj file has a corresponding _noasan.o file, then 
+# just link in the _nosasan.o file.
+NOASANEMBEDEDOBJS := $(filter %_noasan.o,$(EMBEDEDOBJS))
+EMBEDEDOBJS       := $(filter-out $(patsubst %_noasan.o,%.o,$(NOASANEMBEDEDOBJS)),$(EMBEDEDOBJS))
+$(info EMBEDEDOBJS=$(EMBEDEDOBJS))
 
 SRCCOBJS     := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCCFILES))
 SRCCPPOBJS   := $(patsubst %.cpp,$(OBJDIR)/%.o,$(SRCCPPFILES))
@@ -76,7 +81,7 @@ $(GENHDR) : $(GENHDRDIR)/%.h : %.c $(MAKEFILE_LIST) | $(GENHDRDIR)
 GOOGLETEST_ROOT  ?= $(3PROOT)/googletest
 BOOST_ROOT       ?= $(3PROOT)/boost_1_89_0
 
-OBJS         := $(sort $(SRCCOBJS) $(SRCCPPOBJS)) $(sort $(TESTCOBJS) $(TESTCPPOBJS))
+OBJS         := $(sort $(SRCCOBJS) $(SRCCPPOBJS)) $(sort $(TESTCOBJS) $(TESTCPPOBJS)) $(EMBEDEDOBJS)
 
 DEPFILE       = $(patsubst %.o,%.d,$(1))
 
@@ -107,17 +112,12 @@ $(MAINCPPOBJS) : $(OBJDIR)/%_main.o : %.cpp
 $(TESTEXE) : $(OBJS) $(MAKEFILE_LIST) | $(TESTBINDIR)
 	g++ -o $@ $(OBJS) $(GOOGLETEST_ROOT)/build/lib/libgmock.a $(GOOGLETEST_ROOT)/build/lib/libgtest.a
 
-# if an embedded obj file has a corresponding _noasan.o file, then 
-# just link in the _nosasan.o file.
-NOASANEMBEDDEDOBJS := $(filter %_noasan.o,$(EMBEDDEDOBJS))
-EMBEDEDDOBJS       := $(filter-out $(patsubst %_noasan.o,%.o,$(NOASANEMBEDDEDOBJS)),$(EMBEDDEDOBJS))
-
 EXESRCOBJS := $(sort \
   $(filter-out $(patsubst %.c,$(OBJDIR)/%.o,$(MAINC)),$(SRCCOBJS)) \
   $(filter-out $(patsubst %.cpp,$(OBJDIR)/%.o,$(MAINCPP)),$(SRCCPPOBJS)))
 
-$(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJS) $(EMBEDEDDOBJS) | $(BINDIR)
-	g++ -o $@ $< $(EXESRCOBJS) $(EMBEDEDDOBJS)
+$(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJS) $(EMBEDEDOBJS) | $(BINDIR)
+	g++ -o $@ $< $(EXESRCOBJS) $(EMBEDEDOBJS)
 
 $(TESTTS) : $(TESTEXE) | $(TESTTSDIR)
 	$(RM) $@

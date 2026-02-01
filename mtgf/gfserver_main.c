@@ -1,3 +1,5 @@
+#include "content.h"
+#include "gf-student.h"
 #include "gfserver-student.h"
 
 #include <errno.h>
@@ -8,6 +10,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#if !defined(TEST_MODE)
+static ssize_t hc_native_send_header_(GfContext** ctx,
+                                      gfstatus_t  status,
+                                      size_t      fileLen,
+                                      void*       clientData) {
+    (void)clientData;
+    return gfs_sendheader((gfcontext_t**)ctx, status, fileLen);
+}
+
+static ssize_t hc_native_send_(GfContext**  ctx,
+                               void const*  data,
+                               size_t const size,
+                               void*        clientData) {
+    (void)clientData;
+    return gfs_send((gfcontext_t**)ctx, data, size);
+}
+
+static void hc_native_abort_(GfContext** ctx, void* clientData) {
+    (void)clientData;
+    gfs_abort((gfcontext_t**)ctx);
+}
+
+static void hc_init_native(HandlerClient* client) {
+    hc_initialize(client,
+                  hc_native_send_header_,
+                  hc_native_send_,
+                  hc_native_abort_,
+                  NULL);
+}
 
 #define USAGE                                                                 \
     "usage:\n"                                                                \
@@ -21,7 +53,6 @@
     "  -d [delay]          Delay in content_get, default 0, range 0-5000000 " \
     "(microseconds)\n "
 
-#if !defined(TEST_MODE)
 /* OPTIONS DESCRIPTOR ====================================================== */
 static struct option gLongOptions[] = {
     {"help", no_argument, NULL, 'h'},
@@ -109,9 +140,21 @@ int main(int argc, char** argv) {
     gfserver_set_port(&gfs, port);
     gfserver_set_maxpending(&gfs, 24);
     gfserver_set_handler(&gfs, gfs_handler);
-    gfserver_set_handlerarg(&gfs, NULL); // doesn't have to be NULL!
+
+    Source source;
+    content_source_init(&source);
+
+    HandlerClient handlerClient;
+    hc_init_native(&handlerClient);
+
+    MultiThreadedHandler* handler =
+        mth_start(nthreads, &handlerClient, &source);
+
+    gfserver_set_handlerarg(&gfs, handler);
 
     /*Loops forever*/
     gfserver_serve(&gfs);
+
+    mth_finish(handler);
 }
 #endif
