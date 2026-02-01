@@ -1,5 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
 #include "gf-student.h"
 #include "gfclient-student.h"
+#include "gfclient.h"
+#include "workload.h"
 
 #include <sys/stat.h>
 
@@ -132,3 +135,239 @@ int main(int argc, char** argv) {
     return 0;
 }
 #endif // TEST_MODE
+
+/////////////////////////////////////////////////////////////
+// Multi Threaded Client
+/////////////////////////////////////////////////////////////
+
+typedef struct {
+    Sink*          sink;
+    char*          server;
+    unsigned short port;
+} MtcWorkerData;
+
+struct MultiThreadedClientTag {
+    WorkerPool*   pool;
+    MtcWorkerData workerData;
+};
+
+typedef struct {
+    char* reqPath;
+    char* localPath;
+} MtcTask;
+
+MtcTask* mtc_create_task_(char const* const reqPath,
+                          char const* const localPath) {
+    MtcTask* out   = (MtcTask*)calloc(1, sizeof(MtcTask));
+    out->reqPath   = strdup(reqPath);
+    out->localPath = strdup(localPath);
+    return out;
+}
+
+void mtc_destroy_task_(MtcTask* task) {
+    free(task->reqPath);
+    free(task->localPath);
+    free(task);
+}
+
+typedef struct {
+    Sink* sink;
+    void* session;
+} MtcWriteFcnData;
+
+void mtc_write_fcn_(void* buffer, size_t const size, void* data_) {
+    MtcWriteFcnData* data = (MtcWriteFcnData*)data_;
+    sink_send(data->sink, data->session, buffer, size);
+}
+
+void* mtc_create_worker_data_(void* workerData_) {
+    return workerData_;
+}
+
+void mtc_do_request_(void* task_, void* workerData_) {
+    MtcTask*       task        = (MtcTask*)task_;
+    MtcWorkerData* workerData  = (MtcWorkerData*)workerData_;
+    void* const    sinkSession = sink_start(workerData->sink, task->localPath);
+    if (!sinkSession) {
+        return;
+    }
+
+    gfcrequest_t* req = gfc_create();
+    gfc_set_path(&req, task->reqPath);
+    gfc_set_port(&req, workerData->port);
+    gfc_set_server(&req, workerData->server);
+    gfc_set_writefunc(&req, mtc_write_fcn_);
+    MtcWriteFcnData data = {.sink = workerData->sink, .session = sinkSession};
+    gfc_set_writearg(&req, &data);
+
+    if (gfc_perform(&req) < 0 || gfc_get_status(&req) != GF_OK) {
+        fprintf(stderr, "failed to read %s\n", task->reqPath);
+        sink_cancel(workerData->sink, sinkSession);
+        return;
+    }
+    sink_finish(workerData->sink, sinkSession);
+    gfc_cleanup(&req);
+    fprintf(stdout, "read %s\n", task->reqPath);
+
+    mtc_destroy_task_(task);
+}
+
+MultiThreadedClient* mtc_start(char const*    server,
+                               unsigned short port,
+                               size_t         numThreads,
+                               Sink*          sink) {
+    MultiThreadedClient* out =
+        (MultiThreadedClient*)calloc(1, sizeof(MultiThreadedClient));
+    out->workerData.sink   = sink;
+    out->workerData.server = strdup(server);
+    out->workerData.port   = port;
+    out->pool              = wp_start(
+        numThreads, mtc_do_request_, mtc_create_worker_data_, &out->workerData);
+    return out;
+}
+
+void mtc_process(MultiThreadedClient* mtc,
+                 char const*          reqPath,
+                 char const*          localPath) {
+    wp_add_task(mtc->pool, mtc_create_task_(reqPath, localPath));
+}
+
+void mtc_finish(MultiThreadedClient* mtc) {
+    wp_finish(mtc->pool, NULL, NULL);
+    free(mtc->workerData.server);
+    free(mtc);
+}
+
+/////////////////////////////////////////////////////////
+// Sink
+/////////////////////////////////////////////////////////
+
+void sink_initialize(Sink*         sink,
+                     SinkStartFcn  startFcn,
+                     SinkSendFcn   sendFcn,
+                     SinkCancelFcn cancelFcn,
+                     SinkFinishFcn finishFcn,
+                     void*         sinkData) {
+    memset(sink, 0, sizeof(Sink));
+    sink->startFcn  = startFcn;
+    sink->sendFcn   = sendFcn;
+    sink->cancelFcn = cancelFcn;
+    sink->finishFcn = finishFcn;
+    sink->sinkData  = sinkData;
+}
+
+void* sink_start(Sink* sink, char const* path) {
+    return sink->startFcn(sink->sinkData, path);
+}
+
+ssize_t sink_send(Sink* const       sink,
+                  void* const       session,
+                  void const* const buffer,
+                  size_t const      n) {
+    return sink->sendFcn(sink->sinkData, session, buffer, n);
+}
+
+void sink_cancel(Sink* sink, void* session) {
+    sink->cancelFcn(sink->sinkData, session);
+}
+
+int sink_finish(Sink* sink, void* session) {
+    return sink->finishFcn(sink->sinkData, session);
+}
+
+typedef struct {
+    FILE* file;
+    char* path;
+} FileSinkSession;
+
+FileSinkSession* fsink_session_create_(FILE* fh, char const* path) {
+    FileSinkSession* session =
+        (FileSinkSession*)calloc(1, sizeof(FileSinkSession));
+    session->file = fh;
+    session->path = strdup(path);
+    return session;
+}
+
+void fsink_session_destroy_(FileSinkSession* session) {
+    free(session->path);
+    free(session);
+}
+
+static FILE* open_file_(char* const path) {
+    char *cur, *prev;
+    FILE* ans;
+
+    /* Make the directory if it isn't there */
+    prev = path;
+    while (NULL != (cur = strchr(prev + 1, '/'))) {
+        *cur = '\0';
+
+        if (0 > mkdir(&path[0], S_IRWXU)) {
+            if (errno != EEXIST) {
+                perror("Unable to create directory");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        *cur = '/';
+        prev = cur;
+    }
+
+    if (NULL == (ans = fopen(&path[0], "w"))) {
+        perror("Unable to open file");
+        exit(EXIT_FAILURE);
+    }
+
+    return ans;
+}
+
+// the start function for the file transfer sink.  Opens the file.  Use STDLIB
+// file API instead of system.
+static void* file_sink_start_(void* const sinkData, char const* const path) {
+
+    (void)sinkData;
+    char* localPath = strdup(path);
+    FILE* fh        = open_file_(localPath);
+    free(localPath);
+    if (fh) {
+        return fsink_session_create_(fh, path);
+    }
+    return NULL;
+}
+
+// basically fwrite
+static ssize_t file_sink_send_(void* const       sinkData,
+                               void* const       session_,
+                               void const* const buffer,
+                               size_t const      nBytes) {
+    (void)sinkData;
+    FileSinkSession* session = (FileSinkSession*)session_;
+    return (ssize_t)fwrite(buffer, 1, nBytes, session->file);
+}
+
+// close the file and then remove it.  ignore remove errors.
+static void file_sink_cancel_(void* const sinkData, void* const session_) {
+    (void)sinkData;
+    FileSinkSession* session = (FileSinkSession*)session_;
+    fclose(session->file);
+    remove(session->path);
+    fsink_session_destroy_(session);
+}
+
+// close the file
+static int file_sink_finish_(void* const sinkData, void* const session_) {
+    (void)sinkData;
+    FileSinkSession* session = (FileSinkSession*)session_;
+    fclose(session->file);
+    fsink_session_destroy_(session);
+    return 0;
+}
+
+void fsink_init(Sink* sink) {
+    sink_initialize(sink,
+                    file_sink_start_,
+                    file_sink_send_,
+                    file_sink_cancel_,
+                    file_sink_finish_,
+                    NULL);
+}

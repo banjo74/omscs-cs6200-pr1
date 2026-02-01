@@ -17,6 +17,8 @@ ARCHDIR     := $(OS)/$(MACHINE)
 THISDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 MODNAME     := $(notdir $(realpath .))
 
+-include module.mk
+
 DERIVEDDIR  := $(THISDIR)/derived/$(ARCHDIR)/$(MODNAME)
 TESTBINDIR  := $(DERIVEDDIR)
 TESTTSDIR   := $(DERIVEDDIR)/ts
@@ -44,7 +46,6 @@ EMBEDEDOBJS := $(call ALLFILESWITHEXTENSION,o)
 # just link in the _nosasan.o file.
 NOASANEMBEDEDOBJS := $(filter %_noasan.o,$(EMBEDEDOBJS))
 EMBEDEDOBJS       := $(filter-out $(patsubst %_noasan.o,%.o,$(NOASANEMBEDEDOBJS)),$(EMBEDEDOBJS))
-$(info EMBEDEDOBJS=$(EMBEDEDOBJS))
 
 SRCCOBJS     := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCCFILES))
 SRCCPPOBJS   := $(patsubst %.cpp,$(OBJDIR)/%.o,$(SRCCPPFILES))
@@ -53,13 +54,16 @@ TESTCPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%.o,$(TESTCPPFILES))
 
 MAINC        := $(if $(SRCCFILES),$(shell grep -l TEST_MODE $(SRCCFILES)))
 MAINCPP      := $(if $(SRCCPPFILES),$(shell grep -l TEST_MODE $(SRCCPPFILES)))
+CEXEBASE     := $(patsubst %.c,%,$(MAINC))
+CPPEXEBASE   := $(patsubst %.cpp,%,$(MAINCPP))
 
-MAINCOBJS    := $(patsubst %.c,$(OBJDIR)/%_main.o,$(MAINC))
-MAINCPPOBJS  := $(patsubst %.cpp,$(OBJDIR)/%_main.o,$(MAINCPP))
+MAINOBJ       = $(patsubst %,$(OBJDIR)/%_main.o,$(1))
+MAINCOBJS    := $(call MAINOBJ,$(CEXEBASE))
+MAINCPPOBJS  := $(call MAINOBJ,$(CPPEXEBASE))
 
-MAINOBJS     := $(sort $(MAINCOBJS) $(MAINCPPOBJS))
-EXE          := $(patsubst $(OBJDIR)/%_main.o,$(BINDIR)/%,$(MAINOBJS))
-$(info $(EXE))
+EXEBASE      := $(sort $(CEXEBASE) $(CPPEXEBASE))
+EXE           = $(patsubst %,$(BINDIR)/%,$(1))
+EXES         := $(call EXE,$(EXEBASE))
 
 GENHDRFROM   := $(if $(SRCCFILES),$(shell grep -l HEADER_START $(SRCCFILES)))
 GENHDR       := $(patsubst %.c,$(GENHDRDIR)/%.h,$(GENHDRFROM))
@@ -116,8 +120,18 @@ EXESRCOBJS := $(sort \
   $(filter-out $(patsubst %.c,$(OBJDIR)/%.o,$(MAINC)),$(SRCCOBJS)) \
   $(filter-out $(patsubst %.cpp,$(OBJDIR)/%.o,$(MAINCPP)),$(SRCCPPOBJS)))
 
-$(EXE) : $(BINDIR)/% : $(OBJDIR)/%_main.o $(EXESRCOBJS) $(EMBEDEDOBJS) | $(BINDIR)
-	g++ -o $@ $< $(EXESRCOBJS) $(EMBEDEDOBJS)
+OBJSFOREXE = $(call MAINOBJ,$(1)) $(filter-out $(patsubst %.c,$(OBJDIR)/%.o,$(SKIPSRCFOREXE.$(1))),$(EXESRCOBJS)) $(EMBEDEDOBJS)
+
+$(info OBJSFOREXE=$(call OBJSFOREXE,gfclient_download))
+define SETUP_EXEOBJS
+  $(call EXE,$(1)) : EXEOBJS:=$$(call OBJSFOREXE,$(1))
+  $(call EXE,$(1)) : $$(call OBJSFOREXE,$(1))
+
+endef
+$(eval $(foreach e,$(EXEBASE),$(call SETUP_EXEOBJS,$(e))))
+
+$(EXES) : | $(BINDIR)
+	g++ -o $@ $(EXEOBJS)
 
 $(TESTTS) : $(TESTEXE) | $(TESTTSDIR)
 	$(RM) $@
@@ -126,7 +140,7 @@ $(TESTTS) : $(TESTEXE) | $(TESTTSDIR)
 
 SYSTEMTEST   := $(wildcard test/*_system.pl)
 SYSTEMTESTTS := $(patsubst test/%_system.pl,$(TESTTSDIR)/%_system.ts,$(SYSTEMTEST))
-$(SYSTEMTESTTS) : $(TESTTSDIR)/%_system.ts : test/%_system.pl $(TESTTS) $(EXE) | $(TESTTSDIR)
+$(SYSTEMTESTTS) : $(TESTTSDIR)/%_system.ts : test/%_system.pl $(TESTTS) $(EXES) | $(TESTTSDIR)
 	$(RM) $@
 	perl $< $(BINDIR)
 	touch $@
