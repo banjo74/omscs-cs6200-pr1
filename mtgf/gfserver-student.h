@@ -4,6 +4,11 @@
  */
 #ifndef __GF_SERVER_STUDENT_H__
 #define __GF_SERVER_STUDENT_H__
+// gfserver.h not standalone
+#include <sys/types.h>
+
+#include <stddef.h>
+// gfserver.h not standalone
 
 #include "gfserver.h"
 
@@ -36,32 +41,57 @@ typedef struct MultiThreadedHandlerTag MultiThreadedHandler;
 typedef struct HandlerClientTag        HandlerClient;
 typedef struct SourceTag               Source;
 
+// Start's a multi threaded request handler with numThreads.  The HandlerClient
+// abstracts the send header, send, and abort callbacks so that
+// MultiThreadedHandler may be unit tested without firing up a server.
+//
+// Source is the provider of file content.
 MultiThreadedHandler* mth_start(size_t         numThreads,
                                 HandlerClient* handlerClient,
                                 Source*        source);
 
+// process a single request.  The request is not necessarily processed before
+// calls to mth_process return.  See mth_finish below.
 void mth_process(MultiThreadedHandler* mtc,
                  gfcontext_t**         ctx,
                  char const*           path);
 
+// finish processing all requests and return.  note, in production, the server
+// doesn't shut down but for testing purposes, we need to be able to shudown the
+// handler.
 void mth_finish(MultiThreadedHandler*);
 
 /////////////////////////////////////////////////////////////
 // Handler Client
 /////////////////////////////////////////////////////////////
 
+// HandlerClient is an abstraction of the functions that the hander is supposed
+// to call.  Normally these would be implemented by the server but we want to be
+// able to test the MultiThreadedHandler without having a server around
+// (especially because the production server can't be shut down).
+
+// see sendHeader in HandlerClient
 typedef ssize_t (*HcSendHeader)(gfcontext_t**,
                                 gfstatus_t status,
                                 size_t     fileLen,
                                 void*);
+// see send in HandlerClient
 typedef ssize_t (*HcSend)(gfcontext_t**, void const* data, size_t size, void*);
+// see abort in HandlerClient
 typedef void (*HcAbort)(gfcontext_t**, void*);
 
 struct HandlerClientTag {
+    // send a header to the client.  if status != GF_OK, expect the client to
+    // take ownership of the ctx.
     HcSendHeader sendHeader;
-    HcSend       send;
-    HcAbort      abort;
-    void*        clientData;
+    // If status is GF_OK then send data with send.  send is expected to take
+    // ownership of ctx once it's received a number of bytes that matches the
+    // size provided to sendHeader.
+    HcSend send;
+    // abort the session, taking ownership of the context.
+    HcAbort abort;
+    // client-specific data.
+    void* clientData;
 };
 
 void hc_initialize(HandlerClient*,
@@ -70,15 +100,20 @@ void hc_initialize(HandlerClient*,
                    HcAbort      abort,
                    void*        clientData);
 
+// convenience call to sendHeader passing along the clientData as well.
 ssize_t hc_send_header(HandlerClient*,
                        gfcontext_t**,
                        gfstatus_t status,
                        size_t     fileLen);
 
+// convenience call to send passing along the clientData as well.
 ssize_t hc_send(HandlerClient*, gfcontext_t**, void const* data, size_t size);
 
+// convenience call to abort passing along the clientData as well.
 void hc_abort(HandlerClient*, gfcontext_t**);
 
+// initialize a HandlerClient that calls the actual gfs_sendheader, gfs_send,
+// and gfs_abort.
 void hc_init_native(HandlerClient* client);
 
 /////////////////////////////////////////////////////////
@@ -148,7 +183,7 @@ ssize_t source_read(Source* source, void*, void*, size_t);
 // finish a session, see finishFcn in Source above
 int source_finish(Source* source, void*);
 
-// initialize a source to read files from the disk
+// Initialize a source to read data from the content oracle.  See content.h.
 void content_source_init(Source*);
 
 #ifdef __cplusplus

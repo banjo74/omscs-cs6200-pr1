@@ -351,11 +351,11 @@ static void shutdown_(int const socketId) {
     close(socketId);
 }
 
-EchoServerStatus es_run(EchoServer* es,
-                        ContinueFcn continueFcn,
-                        void*       continueFcnData,
-                        LogFcn      logFcn,
-                        void*       logFcnData) {
+EchoServerStatus es_run(EchoServer* const es,
+                        ContinueFcn       continueFcn,
+                        void* const       continueFcnData,
+                        LogFcn            logFcn,
+                        void* const       logFcnData) {
     assert(es->socketId != -1);
     assert(es->usedAddrInfo);
     while (continue_(continueFcn, continueFcnData)) {

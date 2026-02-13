@@ -293,10 +293,10 @@ TransferClient* tc_create(TransferClientStatus* const status,
 // returns -1 on failure.  ec->addressInfo must be valid.
 // addressInfo contains several options, e.g., IPv4 vs IPv6 or aliases.  use the
 // first that succeeds.
-static int create_and_connect_to_socket_(TransferClient* const tc) {
-    assert(tc->addrInfo);
+static int create_and_connect_to_socket_(struct addrinfo* ai) {
+    assert(ai);
     int socketFid = -1;
-    for (struct addrinfo* ai = tc->addrInfo; ai; ai = ai->ai_next) {
+    for (; ai; ai = ai->ai_next) {
         if ((socketFid = socket(
                  ai->ai_family, ai->ai_socktype, ai->ai_protocol)) == -1) {
             continue;
@@ -313,8 +313,7 @@ static int create_and_connect_to_socket_(TransferClient* const tc) {
 // start a session with sink.  keep reading data from socketId and send to the
 // sink.  if a receive failure happens, cancel the sink session.  on success
 // finish the sink session.
-static TransferClientStatus receive_and_redirect_(TransferClient* const tc,
-                                                  int const     socketId,
+static TransferClientStatus receive_and_redirect_(int const     socketId,
                                                   TransferSink* sink) {
     char  buffer[1024];
     int   rc      = -1;
@@ -334,11 +333,11 @@ static TransferClientStatus receive_and_redirect_(TransferClient* const tc,
 }
 
 TransferClientStatus tc_receive(TransferClient* const tc, TransferSink* sink) {
-    int const socket = create_and_connect_to_socket_(tc);
+    int const socket = create_and_connect_to_socket_(tc->addrInfo);
     if (socket == -1) {
         return TransferClientFailedToConnect;
     }
-    TransferClientStatus const status = receive_and_redirect_(tc, socket, sink);
+    TransferClientStatus const status = receive_and_redirect_(socket, sink);
     close(socket);
     return status;
 }

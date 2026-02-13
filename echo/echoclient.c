@@ -203,13 +203,13 @@ EchoClient* ec_create(EchoClientStatus* const status,
 }
 
 // search through address info for a socket that will accept our connection.
-// returns -1 on failure.  ec->addressInfo must be valid.
+// returns -1 on failure.  ai must be valid.
 // addressInfo contains several options, e.g., IPv4 vs IPv6 or aliases.  use the
 // first that succeeds.
-static int create_and_connect_to_socket_(EchoClient* const ec) {
-    assert(ec->addressInfo);
+static int create_and_connect_to_socket_(struct addrinfo* ai) {
+    assert(ai);
     int socketFid = -1;
-    for (struct addrinfo* ai = ec->addressInfo; ai; ai = ai->ai_next) {
+    for (; ai; ai = ai->ai_next) {
         if ((socketFid = socket(
                  ai->ai_family, ai->ai_socktype, ai->ai_protocol)) == -1) {
             continue;
@@ -241,10 +241,9 @@ static EchoClientStatus send_all_(int const         socketId,
 // read data from the socket and send to receiveFcn.  we expect the server to
 // close the socket when the message is done.  don't assume the message is the
 // same size as the one we sent.  the server may be tuncating it.
-static EchoClientStatus receive_and_redirect_(EchoClient* const ec,
-                                              int const         socketId,
-                                              ReceiveFcn        receiveFcn,
-                                              void* const       receiveData) {
+static EchoClientStatus receive_and_redirect_(int const   socketId,
+                                              ReceiveFcn  receiveFcn,
+                                              void* const receiveData) {
     char buffer[1024]; // this buffer size doesn't need to match the buffer size
                        // in the server.
     ssize_t numReceived = 0;
@@ -262,7 +261,7 @@ EchoClientStatus ec_send_and_receive(EchoClient* const ec,
                                      char const* const message,
                                      ReceiveFcn        receiveFcn,
                                      void* const       receiveData) {
-    int const socketFd = create_and_connect_to_socket_(ec);
+    int const socketFd = create_and_connect_to_socket_(ec->addressInfo);
     int       status   = EchoClientSuccess;
 
     if (socketFd < 0) {
@@ -275,7 +274,7 @@ EchoClientStatus ec_send_and_receive(EchoClient* const ec,
         goto EXIT_POINT;
     }
 
-    status = receive_and_redirect_(ec, socketFd, receiveFcn, receiveData);
+    status = receive_and_redirect_(socketFd, receiveFcn, receiveData);
 
 EXIT_POINT:
     if (socketFd != -1) {

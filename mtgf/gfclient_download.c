@@ -48,6 +48,9 @@ static void localPath(char* req_path, char* local_path) {
     sprintf(local_path, "%s-%06d", &req_path[1], counter++);
 }
 
+// if you're looking for openFile, it's been moved below and name changed to
+// open_file_
+
 /* Main ========================================================= */
 int main(int argc, char** argv) {
     /* COMMAND LINE OPTIONS ============================================= */
@@ -108,11 +111,13 @@ int main(int argc, char** argv) {
     }
     gfc_global_init();
 
-    // add your threadpool creation here
-
+    // setup a file sink.
     Sink sink;
     fsink_init(&sink);
+
+    // start the client running, we're going to start making requests below.
     MultiThreadedClient* mtc = mtc_start(server, port, nthreads, &sink);
+
     for (int i = 0; i < nrequests; i++) {
         req_path = workload_get_path();
 
@@ -124,9 +129,12 @@ int main(int argc, char** argv) {
         }
 
         localPath(req_path, local_path);
+        // post the request
         mtc_process(mtc, req_path, local_path);
     }
 
+    // finish up the MultiThreadedClient.  All requests will be processed once
+    // this call returns.
     mtc_finish(mtc);
 
     gfc_global_cleanup(); /* use for any global cleanup for AFTER your thread
@@ -140,22 +148,28 @@ int main(int argc, char** argv) {
 // Multi Threaded Client
 /////////////////////////////////////////////////////////////
 
+// worker data used by all client workers.  there's no mutable dat in this
+// worker data so they all share the same data.
 typedef struct {
     Sink*          sink;
     char*          server;
     unsigned short port;
 } MtcWorkerData;
 
+// the actual MultiThreadedClient.  Holds the pool and the workerData.
 struct MultiThreadedClientTag {
     WorkerPool*   pool;
     MtcWorkerData workerData;
 };
 
+// a single task that represents one request.  it owns the reqPath and
+// localPath.
 typedef struct {
     char* reqPath;
     char* localPath;
 } MtcTask;
 
+// create a task with reqPath and localPath.
 MtcTask* mtc_create_task_(char const* const reqPath,
                           char const* const localPath) {
     MtcTask* out   = (MtcTask*)calloc(1, sizeof(MtcTask));
@@ -164,34 +178,45 @@ MtcTask* mtc_create_task_(char const* const reqPath,
     return out;
 }
 
+// and destroy a task, free'ing the strings and the structure itself.
 void mtc_destroy_task_(MtcTask* task) {
     free(task->reqPath);
     free(task->localPath);
     free(task);
 }
 
+// this is the object used as the argument for the writefunc in the gfcrequest.
+// it's got what we need to call the sink.  it owns none of its data.  and is
+// create on the stack below.
 typedef struct {
     Sink* sink;
     void* session;
 } MtcWriteFcnData;
 
+// this is the function used as the writefunc in the gfcrequest.
 void mtc_write_fcn_(void* buffer, size_t const size, void* data_) {
     MtcWriteFcnData* data = (MtcWriteFcnData*)data_;
     sink_send(data->sink, data->session, buffer, size);
 }
 
+// this is used with the worker pool to "create" the worker data.  all workers
+// share the same data so it just returns the provided argument.
 void* mtc_create_worker_data_(void* workerData_) {
     return workerData_;
 }
 
+// where the actual request happens.  it's passed a task and the workerData
 void mtc_do_request_(void* task_, void* workerData_) {
-    MtcTask*       task        = (MtcTask*)task_;
-    MtcWorkerData* workerData  = (MtcWorkerData*)workerData_;
-    void* const    sinkSession = sink_start(workerData->sink, task->localPath);
+    MtcTask*       task       = (MtcTask*)task_;
+    MtcWorkerData* workerData = (MtcWorkerData*)workerData_;
+
+    // start a sink session ready to write
+    void* const sinkSession = sink_start(workerData->sink, task->localPath);
     if (!sinkSession) {
         return;
     }
 
+    // create the request and setup all the data.
     gfcrequest_t* req = gfc_create();
     gfc_set_path(&req, task->reqPath);
     gfc_set_port(&req, workerData->port);
@@ -200,15 +225,25 @@ void mtc_do_request_(void* task_, void* workerData_) {
     MtcWriteFcnData data = {.sink = workerData->sink, .session = sinkSession};
     gfc_set_writearg(&req, &data);
 
+    // perform the request and check that it went as expected.
+    // do print some kind of status but keep it to just one call to fpintf
+    // either way so we don't get jumbled output.
     if (gfc_perform(&req) < 0 || gfc_get_status(&req) != GF_OK) {
-        fprintf(stderr, "failed to read %s\n", task->reqPath);
+        fprintf(stderr,
+                "failed to read %s.\nreceived %zu bytes\nexpecting %zu bytes\n",
+                task->reqPath,
+                gfc_get_bytesreceived(&req),
+                gfc_get_filelen(&req));
         sink_cancel(workerData->sink, sinkSession);
         return;
     }
     sink_finish(workerData->sink, sinkSession);
-    gfc_cleanup(&req);
-    fprintf(stdout, "read %s\n", task->reqPath);
+    fprintf(stdout,
+            "read %s\ncontaining %zu bytes\n",
+            task->reqPath,
+            gfc_get_filelen(&req));
 
+    gfc_cleanup(&req);
     mtc_destroy_task_(task);
 }
 
@@ -233,6 +268,7 @@ void mtc_process(MultiThreadedClient* mtc,
 }
 
 void mtc_finish(MultiThreadedClient* mtc) {
+    // workers have no data so no need for a destroy function.
     wp_finish(mtc->pool, NULL, NULL);
     free(mtc->workerData.server);
     free(mtc);
@@ -275,6 +311,9 @@ int sink_finish(Sink* sink, void* session) {
     return sink->finishFcn(sink->sinkData, session);
 }
 
+// a session for a sink.  we need to keep up with the path in addition to the
+// file handle in case we need to unlink it on failure.  This session data owns
+// the path and file handle.
 typedef struct {
     FILE* file;
     char* path;
@@ -293,6 +332,7 @@ void fsink_session_destroy_(FileSinkSession* session) {
     free(session);
 }
 
+// copied from above but turn the exit's into return NULL.
 static FILE* open_file_(char* const path) {
     char *cur, *prev;
     FILE* ans;
@@ -305,7 +345,7 @@ static FILE* open_file_(char* const path) {
         if (0 > mkdir(&path[0], S_IRWXU)) {
             if (errno != EEXIST) {
                 perror("Unable to create directory");
-                exit(EXIT_FAILURE);
+                return NULL;
             }
         }
 
@@ -315,17 +355,18 @@ static FILE* open_file_(char* const path) {
 
     if (NULL == (ans = fopen(&path[0], "w"))) {
         perror("Unable to open file");
-        exit(EXIT_FAILURE);
     }
 
     return ans;
 }
 
-// the start function for the file transfer sink.  Opens the file.  Use STDLIB
-// file API instead of system.
+// the start function for the file transfer sink.  Opens the file.  defers to
+// open_file_ to do the work.
 static void* file_sink_start_(void* const sinkData, char const* const path) {
 
     (void)sinkData;
+    // note, open_file_, above, modifies the path passed to it.  create a local
+    // copy here just for open_file_.
     char* localPath = strdup(path);
     FILE* fh        = open_file_(localPath);
     free(localPath);
@@ -345,21 +386,26 @@ static ssize_t file_sink_send_(void* const       sinkData,
     return (ssize_t)fwrite(buffer, 1, nBytes, session->file);
 }
 
-// close the file and then remove it.  ignore remove errors.
-static void file_sink_cancel_(void* const sinkData, void* const session_) {
+static void file_sink_done_(void* const sinkData,
+                            void* const session_,
+                            bool        keep) {
     (void)sinkData;
     FileSinkSession* session = (FileSinkSession*)session_;
     fclose(session->file);
-    remove(session->path);
+    if (!keep) {
+        remove(session->path);
+    }
     fsink_session_destroy_(session);
 }
 
+// close the file and then remove it.  ignore remove errors.
+static void file_sink_cancel_(void* const sinkData, void* const session) {
+    file_sink_done_(sinkData, session, false);
+}
+
 // close the file
-static int file_sink_finish_(void* const sinkData, void* const session_) {
-    (void)sinkData;
-    FileSinkSession* session = (FileSinkSession*)session_;
-    fclose(session->file);
-    fsink_session_destroy_(session);
+static int file_sink_finish_(void* const sinkData, void* const session) {
+    file_sink_done_(sinkData, session, true);
     return 0;
 }
 

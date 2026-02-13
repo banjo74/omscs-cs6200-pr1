@@ -5,6 +5,7 @@
 
 #include <sys/stat.h>
 
+#include <assert.h>
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
@@ -114,23 +115,34 @@ int main(int argc, char** argv) {
     // Setting options
     gfserver_set_port(&gfs, port);
     gfserver_set_maxpending(&gfs, 24);
-    gfserver_set_handler(&gfs, gfs_handler);
 
+    // setup the source to get file content from get_content.
     Source source;
     content_source_init(&source);
 
+    // and use the native handler client to call back into gfserver.
     HandlerClient handlerClient;
     hc_init_native(&handlerClient);
 
+    // start the handler
     MultiThreadedHandler* handler =
         mth_start(nthreads, &handlerClient, &source);
 
+    // cause gfs_handler knows to call a MutiThreadedHandler, but it needs to
+    // know which one.
+    gfserver_set_handler(&gfs, gfs_handler);
     gfserver_set_handlerarg(&gfs, handler);
 
-    /*Loops forever*/
+    // run it
     gfserver_serve(&gfs);
 
+    // for testing purposes, the server may be shut down.  do the remaining
+    // cleanup carefully.  Finish processing first.
     mth_finish(handler);
+
+    // then destroy the server
+    // this part closes the listening socket
+    gfserver_destroy(&gfs);
 }
 #endif
 
@@ -138,16 +150,24 @@ int main(int argc, char** argv) {
 // Multi Threaded Handler
 /////////////////////////////////////////////////////////////
 
+// this is the data that's created for each worker.  it's actually shared by all
+// workers in this case.  there's no persistent local state for any of the
+// workers.
 typedef struct {
+    // the handler client we talk to
     HandlerClient* handlerClient;
-    Source*        source;
+    // and the source of files.
+    Source* source;
 } MthWorkerData;
 
+// an individual task for a worker.  the task takes ownership of the ctx and
+// owns the path.
 typedef struct {
     gfcontext_t* ctx;
     char*        path;
 } MthTask;
 
+// create a task, duplicating the string and taking ownership of the ctx.
 MthTask* mth_task_create_(gfcontext_t** ctx, char const* const path) {
     MthTask* task = (MthTask*)calloc(1, sizeof(MthTask));
     task->ctx     = *ctx;
@@ -157,12 +177,16 @@ MthTask* mth_task_create_(gfcontext_t** ctx, char const* const path) {
 }
 
 void mth_task_destroy_(MthTask* task) {
+    assert(!task->ctx);
     free(task->path);
     free(task);
 }
 
+// the handler itself
 struct MultiThreadedHandlerTag {
-    WorkerPool*   pool;
+    // the pool we're going to use
+    WorkerPool* pool;
+    // and the workerData shared by all workers.
     MthWorkerData workerData;
 };
 
@@ -171,39 +195,51 @@ static size_t min_(size_t a, size_t b) {
 }
 
 static void* mth_create_worker_data_(void* workerData) {
+    // workerData is passed into wp_start as the global data and this just
+    // copies that pointer to output
     return workerData;
 }
 
+// where the actual work goes down.  it's passed a task and the worker data.
 static void mth_do_work_(void* task_, void* workerData_) {
     MthTask*       task       = (MthTask*)task_;
     MthWorkerData* workerData = (MthWorkerData*)workerData_;
-    size_t         size       = 0;
-    void* session = source_start(workerData->source, task->path, &size);
+    // ask the source for the file and get its size
+    size_t size    = 0;
+    void*  session = source_start(workerData->source, task->path, &size);
     if (!session) {
+        // something wrong, assume file not found
         hc_send_header(
             workerData->handlerClient, &task->ctx, GF_FILE_NOT_FOUND, size);
         goto EXIT_POINT;
     }
+
+    // send the header
     hc_send_header(workerData->handlerClient, &task->ctx, GF_OK, size);
 
     size_t sent = 0;
     while (sent < size) {
+        // read some and write some
         uint8_t       buffer[1024];
         ssize_t const read = source_read(workerData->source,
                                          session,
                                          buffer,
                                          min_(sizeof(buffer), size - sent));
         if (read < 0) {
+            // bad read, abort should take the context here.
             hc_abort(workerData->handlerClient, &task->ctx);
             goto EXIT_POINT;
         }
+        // send should take the context when we're done
         hc_send(workerData->handlerClient, &task->ctx, buffer, (size_t)read);
         sent += (size_t)read;
     }
 EXIT_POINT:
     if (session) {
+        // finish up the source
         source_finish(workerData->source, session);
     }
+    // and destroy the task
     mth_task_destroy_(task);
 }
 
@@ -226,6 +262,7 @@ void mth_process(MultiThreadedHandler* mtc,
 }
 
 void mth_finish(MultiThreadedHandler* mtc) {
+    // finish up.  there's no worker data to destroy.
     wp_finish(mtc->pool, NULL, NULL);
     free(mtc);
 }
@@ -323,6 +360,9 @@ int source_finish(Source* source, void* session) {
     return source->finishFcn(source->sourceData, session);
 }
 
+// session object used for reading from the content repository, we need to keep
+// up with the fid and where we are (because other requests could be accessing
+// the same file).
 typedef struct {
     int   fid;
     off_t numRead;
@@ -338,7 +378,6 @@ static void* content_source_start_(void*             sourceData,
     }
     struct stat st;
     if (fstat(fid, &st) == -1) {
-        perror("fstat");
         return NULL;
     }
     *size = (size_t)st.st_size;
@@ -365,9 +404,7 @@ static ssize_t content_source_read_(void* const  sourceData,
 static int content_source_finish_(void* const sourceData,
                                   void* const sessionData) {
     (void)sourceData;
-    int const fid = *(int*)sessionData;
-    // don't close contents fids! just move them back to the beginning
-    lseek(fid, 0, SEEK_SET);
+    // mustn't close the fid, that's managed by the content oracle.
     free(sessionData);
     return 0;
 }
