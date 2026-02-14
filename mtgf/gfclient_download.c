@@ -48,6 +48,22 @@ static void localPath(char* req_path, char* local_path) {
     sprintf(local_path, "%s-%06d", &req_path[1], counter++);
 }
 
+static void report_(void*        arg,
+                    bool         success,
+                    char const*  reqPath,
+                    size_t const expected,
+                    size_t const received) {
+    if (!success) {
+        fprintf(stderr,
+                "failed to read %s.\nreceived %zu bytes\nexpecting %zu bytes\n",
+                reqPath,
+                received,
+                expected);
+        return;
+    }
+    fprintf(stdout, "received %s with %zu bytes\n", reqPath, received);
+}
+
 // if you're looking for openFile, it's been moved below and name changed to
 // open_file_
 
@@ -116,7 +132,8 @@ int main(int argc, char** argv) {
     fsink_init(&sink);
 
     // start the client running, we're going to start making requests below.
-    MultiThreadedClient* mtc = mtc_start(server, port, nthreads, &sink);
+    MultiThreadedClient* mtc =
+        mtc_start(server, port, nthreads, &sink, report_, NULL);
 
     for (int i = 0; i < nrequests; i++) {
         req_path = workload_get_path();
@@ -154,6 +171,8 @@ typedef struct {
     Sink*          sink;
     char*          server;
     unsigned short port;
+    ReportFcn      reportFcn;
+    void*          reportFcnArg;
 } MtcWorkerData;
 
 // the actual MultiThreadedClient.  Holds the pool and the workerData.
@@ -170,8 +189,8 @@ typedef struct {
 } MtcTask;
 
 // create a task with reqPath and localPath.
-MtcTask* mtc_create_task_(char const* const reqPath,
-                          char const* const localPath) {
+static MtcTask* mtc_create_task_(char const* const reqPath,
+                                 char const* const localPath) {
     MtcTask* out   = (MtcTask*)calloc(1, sizeof(MtcTask));
     out->reqPath   = strdup(reqPath);
     out->localPath = strdup(localPath);
@@ -179,7 +198,7 @@ MtcTask* mtc_create_task_(char const* const reqPath,
 }
 
 // and destroy a task, free'ing the strings and the structure itself.
-void mtc_destroy_task_(MtcTask* task) {
+static void mtc_destroy_task_(MtcTask* task) {
     free(task->reqPath);
     free(task->localPath);
     free(task);
@@ -194,19 +213,30 @@ typedef struct {
 } MtcWriteFcnData;
 
 // this is the function used as the writefunc in the gfcrequest.
-void mtc_write_fcn_(void* buffer, size_t const size, void* data_) {
+static void mtc_write_fcn_(void* buffer, size_t const size, void* data_) {
     MtcWriteFcnData* data = (MtcWriteFcnData*)data_;
     sink_send(data->sink, data->session, buffer, size);
 }
 
 // this is used with the worker pool to "create" the worker data.  all workers
 // share the same data so it just returns the provided argument.
-void* mtc_create_worker_data_(void* workerData_) {
+static void* mtc_create_worker_data_(void* workerData_) {
     return workerData_;
 }
 
+static void mtc_report_(MtcWorkerData* workerData,
+                        bool           success,
+                        char const*    request,
+                        size_t const   expected,
+                        size_t const   received) {
+    if (workerData->reportFcn) {
+        workerData->reportFcn(
+            workerData->reportFcnArg, success, request, expected, received);
+    }
+}
+
 // where the actual request happens.  it's passed a task and the workerData
-void mtc_do_request_(void* task_, void* workerData_) {
+static void mtc_do_request_(void* task_, void* workerData_) {
     MtcTask*       task       = (MtcTask*)task_;
     MtcWorkerData* workerData = (MtcWorkerData*)workerData_;
 
@@ -229,20 +259,22 @@ void mtc_do_request_(void* task_, void* workerData_) {
     // do print some kind of status but keep it to just one call to fpintf
     // either way so we don't get jumbled output.
     if (gfc_perform(&req) < 0 || gfc_get_status(&req) != GF_OK) {
-        fprintf(stderr,
-                "failed to read %s.\nreceived %zu bytes\nexpecting %zu bytes\n",
-                task->reqPath,
-                gfc_get_bytesreceived(&req),
-                gfc_get_filelen(&req));
+        mtc_report_(workerData,
+                    false,
+                    task->reqPath,
+                    gfc_get_filelen(&req),
+                    gfc_get_bytesreceived(&req));
+        if (workerData->reportFcn) {
+        }
         sink_cancel(workerData->sink, sinkSession);
         return;
     }
     sink_finish(workerData->sink, sinkSession);
-    fprintf(stdout,
-            "read %s\ncontaining %zu bytes\n",
-            task->reqPath,
-            gfc_get_filelen(&req));
-
+    mtc_report_(workerData,
+                true,
+                task->reqPath,
+                gfc_get_filelen(&req),
+                gfc_get_bytesreceived(&req));
     gfc_cleanup(&req);
     mtc_destroy_task_(task);
 }
@@ -250,13 +282,17 @@ void mtc_do_request_(void* task_, void* workerData_) {
 MultiThreadedClient* mtc_start(char const*    server,
                                unsigned short port,
                                size_t         numThreads,
-                               Sink*          sink) {
+                               Sink*          sink,
+                               ReportFcn      reportFcn,
+                               void*          reportFcnArg) {
     MultiThreadedClient* out =
         (MultiThreadedClient*)calloc(1, sizeof(MultiThreadedClient));
-    out->workerData.sink   = sink;
-    out->workerData.server = strdup(server);
-    out->workerData.port   = port;
-    out->pool              = wp_start(
+    out->workerData.sink         = sink;
+    out->workerData.server       = strdup(server);
+    out->workerData.port         = port;
+    out->workerData.reportFcn    = reportFcn;
+    out->workerData.reportFcnArg = reportFcnArg;
+    out->pool                    = wp_start(
         numThreads, mtc_do_request_, mtc_create_worker_data_, &out->workerData);
     return out;
 }
@@ -319,7 +355,7 @@ typedef struct {
     char* path;
 } FileSinkSession;
 
-FileSinkSession* fsink_session_create_(FILE* fh, char const* path) {
+static FileSinkSession* fsink_session_create_(FILE* fh, char const* path) {
     FileSinkSession* session =
         (FileSinkSession*)calloc(1, sizeof(FileSinkSession));
     session->file = fh;
@@ -327,7 +363,7 @@ FileSinkSession* fsink_session_create_(FILE* fh, char const* path) {
     return session;
 }
 
-void fsink_session_destroy_(FileSinkSession* session) {
+static void fsink_session_destroy_(FileSinkSession* session) {
     free(session->path);
     free(session);
 }

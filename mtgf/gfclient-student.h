@@ -19,6 +19,11 @@ extern "C" {
 
 typedef struct MultiThreadedClientTag MultiThreadedClient;
 typedef struct SinkTag                Sink;
+typedef void (*ReportFcn)(void*,
+                          bool        success,
+                          char const* reqPath,
+                          size_t      expected,
+                          size_t      received);
 
 // Start a multi-threaded get file client that will be fetching files from
 // server on port.  The client will run on numThreads and will send files it
@@ -28,7 +33,9 @@ typedef struct SinkTag                Sink;
 MultiThreadedClient* mtc_start(char const*    server,
                                unsigned short port,
                                size_t         numThreads,
-                               Sink*          sink);
+                               Sink*          sink,
+                               ReportFcn      reportFcn,
+                               void*          reportFcnArg);
 
 // ask for a single file from the server specified for mtc.  reqPath is the path
 // to use in the request to the server,  localPath is the path passed to the
