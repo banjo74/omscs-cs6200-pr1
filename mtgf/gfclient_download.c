@@ -453,3 +453,4 @@ void fsink_init(Sink* sink) {
                     file_sink_finish_,
                     NULL);
 }
+
